@@ -538,7 +538,7 @@ static bool _exif_decode_xmp_data(dt_image_t *img, Exiv2::XmpData &xmpData, int 
       }
     }
 
-    if(dt_conf_get_bool("write_sidecar_files") ||
+    if((dt_image_get_xmp_mode() != DT_WRITE_XMP_NEVER) ||
        dt_conf_get_bool("ui_last/import_last_tags_imported"))
     {
       GList *tags = NULL;
@@ -693,7 +693,7 @@ static bool dt_check_usercrop(Exiv2::ExifData &exifData, dt_image_t *img)
   Exiv2::ExifData::const_iterator pos = exifData.findKey(Exiv2::ExifKey("Exif.SubImage1.0xc7b5"));
   if(pos != exifData.end() && pos->count() == 4 && pos->size())
   {
-    float crop[4];
+    dt_boundingbox_t crop;
     for(int i = 0; i < 4; i++) crop[i] = pos->toFloat(i);
     if (((crop[0]>0)||(crop[1]>0)||(crop[2]<1)||(crop[3]<1))&&(crop[2]-crop[0]>0.05f)&&(crop[3]-crop[1]>0.05f))
     {
@@ -918,7 +918,7 @@ static bool _exif_decode_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
       int nominator = pos->toRational(0).first;
       img->exif_focus_distance = fmax(0.0, (0.001 * nominator));
     }
-    else if(EXIV2_MAKE_VERSION(0,25,0) <= Exiv2::versionNumber() && FIND_EXIF_TAG("Exif.CanonFi.FocusDistanceUpper"))
+    else if(Exiv2::testVersion(0,25,0) && FIND_EXIF_TAG("Exif.CanonFi.FocusDistanceUpper"))
     {
       const float FocusDistanceUpper = pos->toFloat();
       if(FocusDistanceUpper <= 0.0f || (int)FocusDistanceUpper >= 0xffff)
@@ -1023,7 +1023,7 @@ static bool _exif_decode_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
     {
       dt_strlcpy_to_utf8(img->exif_lens, sizeof(img->exif_lens), pos, exifData);
     }
-    else if(EXIV2_MAKE_VERSION(0,25,0) <= Exiv2::versionNumber() && FIND_EXIF_TAG("Exif.PentaxDng.LensType"))
+    else if(Exiv2::testVersion(0,25,0) && FIND_EXIF_TAG("Exif.PentaxDng.LensType"))
     {
       dt_strlcpy_to_utf8(img->exif_lens, sizeof(img->exif_lens), pos, exifData);
     }
@@ -1056,9 +1056,24 @@ static bool _exif_decode_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
         fprintf(stderr, "[exif] Warning: lens \"%s\" unknown as \"%s\"\n", img->exif_lens, lens.c_str());
       }
     }
+    else if(Exiv2::testVersion(0,27,4) && FIND_EXIF_TAG("Exif.NikonLd4.LensID") && pos->toLong() == 0)
+    {
+      /* Z body w/ FTZ adapter or recent F body (e.g. D780, D6) detected.
+       * Prioritize the legacy ID lookup instead of Exif.Photo.LensModel included
+       * in the default Exiv2::lensName() search below. */
+      if(FIND_EXIF_TAG("Exif.NikonLd4.LensIDNumber"))
+        dt_strlcpy_to_utf8(img->exif_lens, sizeof(img->exif_lens), pos, exifData);
+    }
     else if((pos = Exiv2::lensName(exifData)) != exifData.end() && pos->size())
     {
       dt_strlcpy_to_utf8(img->exif_lens, sizeof(img->exif_lens), pos, exifData);
+    }
+
+    /* Capitalize Nikon Z-mount lenses properly for UI presentation */
+    if(g_str_has_prefix(img->exif_lens, "NIKKOR"))
+    {
+      for(size_t i = 1; i <= 5; ++i)
+        img->exif_lens[i] = g_ascii_tolower(img->exif_lens[i]);
     }
 
     // finally the lens has only numbers and parentheses, let's try to use
@@ -1162,7 +1177,7 @@ static bool _exif_decode_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
       Exiv2::ExifData::const_iterator cm1_pos = exifData.findKey(Exiv2::ExifKey("Exif.Image.ColorMatrix1"));
       if((illu[0] != DT_LS_Unknown) && (cm1_pos != exifData.end()) && (cm1_pos->count() == 9))
       {
-        for(int i = 0; i < 9; i++) colmatrix[0][i] = cm1_pos->toFloat(i);      
+        for(int i = 0; i < 9; i++) colmatrix[0][i] = cm1_pos->toFloat(i);
       }
       else
         illu[0] = DT_LS_Unknown;
@@ -1171,17 +1186,17 @@ static bool _exif_decode_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
       Exiv2::ExifData::const_iterator cm2_pos = exifData.findKey(Exiv2::ExifKey("Exif.Image.ColorMatrix2"));
       if((illu[1] != DT_LS_Unknown) && (cm2_pos != exifData.end()) && (cm2_pos->count() == 9))
       {
-        for(int i = 0; i < 9; i++) colmatrix[1][i] = cm2_pos->toFloat(i);      
+        for(int i = 0; i < 9; i++) colmatrix[1][i] = cm2_pos->toFloat(i);
       }
       else
         illu[1] = DT_LS_Unknown;
       // So far the Exif.Image.CalibrationIlluminant3 tag and friends have not been implemented and there are no images to test
-#if EXIV2_MINOR_VERSION >= 24
+#if EXIV2_TEST_VERSION(0,27,4)
       if(FIND_EXIF_TAG("Exif.Image.CalibrationIlluminant3")) illu[2] = (dt_dng_illuminant_t) pos->toLong();
       Exiv2::ExifData::const_iterator cm3_pos = exifData.findKey(Exiv2::ExifKey("Exif.Image.ColorMatrix3"));
       if((illu[2] != DT_LS_Unknown) && (cm3_pos != exifData.end()) && (cm3_pos->count() == 9))
       {
-        for(int i = 0; i < 9; i++) colmatrix[2][i] = cm3_pos->toFloat(i);      
+        for(int i = 0; i < 9; i++) colmatrix[2][i] = cm3_pos->toFloat(i);
       }
       else
         illu[2] = DT_LS_Unknown;
@@ -1194,7 +1209,7 @@ static bool _exif_decode_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
       // otherwise we take the one closest >= D65
       for(int i = 0; i < 3; i++)
       {
-        if((illu[i] != DT_LS_Unknown) && (_illu_to_temp(illu[i]) > sel_temp) && (sel_temp < D65temp)) 
+        if((illu[i] != DT_LS_Unknown) && (_illu_to_temp(illu[i]) > sel_temp) && (sel_temp < D65temp))
         {
           sel_illu = i;
           sel_temp = _illu_to_temp(illu[i]);
@@ -1244,7 +1259,7 @@ static bool _exif_decode_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
           case DT_LS_D65:
             for(int i = 0; i < 9; i++) img->d65_color_matrix[i] = colmatrix[sel_illu][i];
             break;
-            
+
           default:
             fprintf(stderr,"[exif] did not find a proper dng correction matrix for illuminant %i\n", illu[sel_illu]);
             break;
@@ -1315,12 +1330,6 @@ static bool _exif_decode_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
         }
       }
     }
-
-#if EXIV2_MINOR_VERSION < 23
-    // workaround for an exiv2 bug writing random garbage into exif_lens for this camera:
-    // http://dev.exiv2.org/issues/779
-    if(!strcmp(img->exif_model, "DMC-GH2")) snprintf(img->exif_lens, sizeof(img->exif_lens), "(unknown)");
-#endif
 
     // Improve lens detection for Sony SAL lenses.
     if(FIND_EXIF_TAG("Exif.Sony2.LensID") && pos->toLong() != 65535 && pos->print().find('|') == std::string::npos)
@@ -1721,16 +1730,9 @@ int dt_exif_read_blob(uint8_t **buf, const char *path, const int imgid, const in
         "Exif.Olympus.ThumbnailOffset",
         "Exif.Olympus.ThumbnailLength",
 
-        "Exif.Image.BaselineExposureOffset"
-        };
-      static const guint n_keys = G_N_ELEMENTS(keys);
-      dt_remove_exif_keys(exifData, keys, n_keys);
-    }
-#if EXIV2_MINOR_VERSION >= 23
-    {
-      // Exiv2 versions older than 0.23 drop all EXIF if the code below is executed
-      // Samsung makernote cleanup, the entries below have no relevance for exported images
-      static const char *keys[] = {
+        "Exif.Image.BaselineExposureOffset",
+
+         // Samsung makernote cleanup, the entries below have no relevance for exported images
         "Exif.Samsung2.SensorAreas",
         "Exif.Samsung2.ColorSpace",
         "Exif.Samsung2.EncryptionKey",
@@ -1750,7 +1752,6 @@ int dt_exif_read_blob(uint8_t **buf, const char *path, const int imgid, const in
       static const guint n_keys = G_N_ELEMENTS(keys);
       dt_remove_exif_keys(exifData, keys, n_keys);
     }
-#endif
 
       static const char *dngkeys[] = {
         // Embedded color profile info
@@ -1841,9 +1842,12 @@ int dt_exif_read_blob(uint8_t **buf, const char *path, const int imgid, const in
           exifData["Exif.Photo.UserComment"] = desc;
         g_list_free_full(res, &g_free);
       }
+#if EXIV2_TEST_VERSION(0,27,4)
       else
         // mandatory tag for TIFF/EP and recommended for Exif, empty is ok (unknown)
+        // but correctly written only by exiv2 >= 0.27.4
         exifData["Exif.Image.ImageDescription"] = "";
+#endif
 
       res = dt_metadata_get(imgid, "Xmp.dc.rights", NULL);
       if(res != NULL)
@@ -1851,9 +1855,12 @@ int dt_exif_read_blob(uint8_t **buf, const char *path, const int imgid, const in
         exifData["Exif.Image.Copyright"] = (char *)res->data;
         g_list_free_full(res, &g_free);
       }
+#if EXIV2_TEST_VERSION(0,27,4)
       else
         // mandatory tag for TIFF/EP and optional for Exif, empty is ok (unknown)
+        // but correctly written only by exiv2 >= 0.27.4
         exifData["Exif.Image.Copyright"] = "";
+#endif
 
       res = dt_metadata_get(imgid, "Xmp.xmp.Rating", NULL);
       if(res != NULL)
@@ -3759,7 +3766,7 @@ static void _exif_xmp_read_data_export(Exiv2::XmpData &xmpData, const int imgid,
   g_free(iop_order_list);
 }
 
-#if EXIV2_VERSION >= EXIV2_MAKE_VERSION(0,27,0)
+#if EXIV2_TEST_VERSION(0,27,0)
 #define ERROR_CODE(a) (static_cast<Exiv2::ErrorCode>((a)))
 #else
 #define ERROR_CODE(a) (a)
@@ -4052,7 +4059,7 @@ int dt_exif_xmp_attach_export(const int imgid, const char *filename, void *metad
     }
     catch(Exiv2::AnyError &e)
     {
-#if EXIV2_VERSION >= EXIV2_MAKE_VERSION(0,27,0)
+#if EXIV2_TEST_VERSION(0,27,0)
       if(e.code() == Exiv2::kerTooLargeJpegSegment)
 #else
       if(e.code() == 37)
@@ -4168,8 +4175,8 @@ int dt_exif_xmp_write(const int imgid, const char *filename)
       {
         fprintf(stderr, "cannot write xmp file '%s': '%s'\n", filename, strerror(errno));
         dt_control_log(_("cannot write xmp file '%s': '%s'"), filename, strerror(errno));
+        return -1;
       }
-
     }
 
     return 0;

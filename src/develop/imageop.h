@@ -206,16 +206,10 @@ typedef struct dt_iop_module_t
   int request_mask_display;
   /** set to 1 if you want the blendif mask to be suppressed in the module in focus. gui mode only. */
   int32_t suppress_mask;
-  /** color picker proxy */
-  struct dt_iop_color_picker_t *picker;
-  /** bounding box in which the mean color is requested. */
-  float color_picker_box[4];
-  /** single point to pick if in point mode */
-  float color_picker_point[2];
   /** place to store the picked color of module input. */
-  float picked_color[4], picked_color_min[4], picked_color_max[4];
+  dt_aligned_pixel_t picked_color, picked_color_min, picked_color_max;
   /** place to store the picked color of module output (before blending). */
-  float picked_output_color[4], picked_output_color_min[4], picked_output_color_max[4];
+  dt_aligned_pixel_t picked_output_color, picked_output_color_min, picked_output_color_max;
   /** pointer to pre-module histogram data; if available: histogram_bins_count bins with 4 channels each */
   uint32_t *histogram;
   /** stats of captured histogram */
@@ -280,8 +274,9 @@ typedef struct dt_iop_module_t
   GtkWidget *fusion_slider;
 
   GSList *widget_list;
-  /** show/hide guide button */
+  /** show/hide guide button and combobox */
   GtkWidget *guides_toggle;
+  GtkWidget *guides_combo;
   /** list of closures: show, enable/disable */
   GSList *accel_closures;
   GSList *accel_closures_local;
@@ -467,7 +462,7 @@ void dt_iop_queue_history_update(dt_iop_module_t *module, gboolean extend_prior)
 void dt_iop_cancel_history_update(dt_iop_module_t *module);
 
 /** (un)hide iop module header right side buttons */
-gboolean dt_iop_show_hide_header_buttons(GtkWidget *header, GdkEventCrossing *event, gboolean show_buttons, gboolean always_hide);
+gboolean dt_iop_show_hide_header_buttons(dt_iop_module_t *module, GdkEventCrossing *event, gboolean show_buttons, gboolean always_hide);
 
 /** add/remove mask indicator to iop module header */
 void add_remove_mask_indicator(dt_iop_module_t *module, gboolean add);
@@ -487,7 +482,8 @@ char *dt_iop_set_description(dt_iop_module_t *module, const char *main_text,
 
 static inline dt_iop_gui_data_t *_iop_gui_alloc(dt_iop_module_t *module, size_t size)
 {
-  module->gui_data = (dt_iop_gui_data_t*)calloc(1, size);
+  // Align so that DT_ALIGNED_ARRAY may be used within gui_data struct
+  module->gui_data = (dt_iop_gui_data_t*)dt_calloc_align(64, size);
   dt_pthread_mutex_init(&module->gui_lock,NULL);
   return module->gui_data;
 }
@@ -495,7 +491,7 @@ static inline dt_iop_gui_data_t *_iop_gui_alloc(dt_iop_module_t *module, size_t 
   (dt_iop_##module##_gui_data_t *)_iop_gui_alloc(self,sizeof(dt_iop_##module##_gui_data_t))
 
 #define IOP_GUI_FREE \
-  dt_pthread_mutex_destroy(&self->gui_lock);if(self->gui_data){free(self->gui_data);} self->gui_data = NULL
+  dt_pthread_mutex_destroy(&self->gui_lock);if(self->gui_data){dt_free_align(self->gui_data);} self->gui_data = NULL
 
 /* return a warning message, prefixed by the special character ⚠ */
 char *dt_iop_warning_message(const char *message);

@@ -79,7 +79,7 @@ static int _thumbs_get_prefs_size(dt_thumbtable_t *table)
   // we get the size delimitations to differentiate sizes categories
   // one we set as many categories as we want (this can be useful if
   // we want to finetune css very precisely)
-  gchar *txt = dt_conf_get_string("plugins/lighttable/thumbnail_sizes");
+  const char *txt = dt_conf_get_string_const("plugins/lighttable/thumbnail_sizes");
   gchar **ts = g_strsplit(txt, "|", -1);
   int i = 0;
   while(ts[i])
@@ -89,7 +89,6 @@ static int _thumbs_get_prefs_size(dt_thumbtable_t *table)
     i++;
   }
   g_strfreev(ts);
-  g_free(txt);
   return i;
 }
 
@@ -984,7 +983,7 @@ static gboolean _event_leave_notify(GtkWidget *widget, GdkEventCrossing *event, 
   }
 
   // if we leave thumbtable in favour of an inferior (a thumbnail) it's not a real leave !
-  if(event->detail == GDK_NOTIFY_INFERIOR) return FALSE;
+  if(event->detail == GDK_NOTIFY_INFERIOR || event->detail == GDK_NOTIFY_VIRTUAL) return FALSE;
 
   table->mouse_inside = FALSE;
   dt_control_set_mouse_over_id(-1);
@@ -1150,12 +1149,10 @@ static void _thumbtable_restore_scrollbars(dt_thumbtable_t *table)
 static void _thumbs_ask_for_discard(dt_thumbtable_t *table)
 {
   // we get "new values"
-  gchar *hq = dt_conf_get_string("plugins/lighttable/thumbnail_hq_min_level");
+  const char *hq = dt_conf_get_string_const("plugins/lighttable/thumbnail_hq_min_level");
   dt_mipmap_size_t hql = dt_mipmap_cache_get_min_mip_from_pref(hq);
-  g_free(hq);
-  gchar *embedded = dt_conf_get_string("plugins/lighttable/thumbnail_raw_min_level");
+  const char *embedded = dt_conf_get_string_const("plugins/lighttable/thumbnail_raw_min_level");
   dt_mipmap_size_t embeddedl = dt_mipmap_cache_get_min_mip_from_pref(embedded);
-  g_free(embedded);
 
   int min_level = 8;
   int max_level = 0;
@@ -1699,7 +1696,7 @@ static void _event_dnd_begin(GtkWidget *widget, GdkDragContext *context, gpointe
   }
 }
 
-static void _event_dnd_received(GtkWidget *widget, GdkDragContext *context, gint x, gint y,
+void dt_thumbtable_event_dnd_received(GtkWidget *widget, GdkDragContext *context, gint x, gint y,
                                 GtkSelectionData *selection_data, guint target_type, guint time,
                                 gpointer user_data)
 {
@@ -1771,12 +1768,10 @@ dt_thumbtable_t *dt_thumbtable_new()
   dt_gui_add_help_link(table->widget, dt_get_help_url("lighttable_filemanager"));
 
   // get thumb generation pref for reference in case of change
-  gchar *tx = dt_conf_get_string("plugins/lighttable/thumbnail_hq_min_level");
+  const char *tx = dt_conf_get_string_const("plugins/lighttable/thumbnail_hq_min_level");
   table->pref_hq = dt_mipmap_cache_get_min_mip_from_pref(tx);
-  g_free(tx);
-  tx = dt_conf_get_string("plugins/lighttable/thumbnail_raw_min_level");
+  tx = dt_conf_get_string_const("plugins/lighttable/thumbnail_raw_min_level");
   table->pref_embedded = dt_mipmap_cache_get_min_mip_from_pref(tx);
-  g_free(tx);
 
   // set css name and class
   gtk_widget_set_name(table->widget, "thumbtable_filemanager");
@@ -1806,7 +1801,7 @@ dt_thumbtable_t *dt_thumbtable_new()
   g_signal_connect_after(table->widget, "drag-begin", G_CALLBACK(_event_dnd_begin), table);
   g_signal_connect_after(table->widget, "drag-end", G_CALLBACK(_event_dnd_end), table);
   g_signal_connect(table->widget, "drag-data-get", G_CALLBACK(_event_dnd_get), table);
-  g_signal_connect(table->widget, "drag-data-received", G_CALLBACK(_event_dnd_received), table);
+  g_signal_connect(table->widget, "drag-data-received", G_CALLBACK(dt_thumbtable_event_dnd_received), table);
 
   g_signal_connect(G_OBJECT(table->widget), "scroll-event", G_CALLBACK(_event_scroll), table);
   g_signal_connect(G_OBJECT(table->widget), "draw", G_CALLBACK(_event_draw), table);
@@ -2055,9 +2050,6 @@ void dt_thumbtable_full_redraw(dt_thumbtable_t *table, gboolean force)
         dt_thumbnail_update_selection(th);
       }
     }
-
-    // be sure the focus is in the right widget (needed for accels)
-    gtk_widget_grab_focus(dt_ui_center(darktable.gui->ui));
 
     dt_print(DT_DEBUG_LIGHTTABLE, "done in %0.04f sec %d thumbs reloaded\n", dt_get_wtime() - start, nbnew);
     g_free(query);

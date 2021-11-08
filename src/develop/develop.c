@@ -178,7 +178,7 @@ void dt_dev_cleanup(dt_develop_t *dev)
   while(dev->allprofile_info)
   {
     dt_ioppr_cleanup_profile_info((dt_iop_order_iccprofile_info_t *)dev->allprofile_info->data);
-    free(dev->allprofile_info->data);
+    dt_free_align(dev->allprofile_info->data);
     dev->allprofile_info = g_list_delete_link(dev->allprofile_info, dev->allprofile_info);
   }
   dt_pthread_mutex_destroy(&dev->history_mutex);
@@ -200,19 +200,18 @@ void dt_dev_cleanup(dt_develop_t *dev)
 
 float dt_dev_get_preview_downsampling()
 {
-  gchar *preview_downsample = dt_conf_get_string("preview_downsampling");
+  const char *preview_downsample = dt_conf_get_string_const("preview_downsampling");
   const float downsample = (g_strcmp0(preview_downsample, "original") == 0) ? 1.0f
         : (g_strcmp0(preview_downsample, "to 1/2")==0) ? 0.5f
         : (g_strcmp0(preview_downsample, "to 1/3")==0) ? 1/3.0f
         : 0.25f;
-  g_free(preview_downsample);
   return downsample;
 }
 
 void dt_dev_process_image(dt_develop_t *dev)
 {
   if(!dev->gui_attached || dev->pipe->processing) return;
-  int err
+  const int err
       = dt_control_add_job_res(darktable.control, dt_dev_process_image_job_create(dev), DT_CTL_WORKER_ZOOM_1);
   if(err) fprintf(stderr, "[dev_process_image] job queue exceeded!\n");
 }
@@ -220,7 +219,7 @@ void dt_dev_process_image(dt_develop_t *dev)
 void dt_dev_process_preview(dt_develop_t *dev)
 {
   if(!dev->gui_attached) return;
-  int err = dt_control_add_job_res(darktable.control, dt_dev_process_preview_job_create(dev),
+  const int err = dt_control_add_job_res(darktable.control, dt_dev_process_preview_job_create(dev),
                                    DT_CTL_WORKER_ZOOM_FILL);
   if(err) fprintf(stderr, "[dev_process_preview] job queue exceeded!\n");
 }
@@ -229,7 +228,7 @@ void dt_dev_process_preview2(dt_develop_t *dev)
 {
   if(!dev->gui_attached) return;
   if(!(dev->second_window.widget && GTK_IS_WIDGET(dev->second_window.widget))) return;
-  int err = dt_control_add_job_res(darktable.control, dt_dev_process_preview2_job_create(dev),
+  const int err = dt_control_add_job_res(darktable.control, dt_dev_process_preview2_job_create(dev),
                                    DT_CTL_WORKER_ZOOM_2);
   if(err) fprintf(stderr, "[dev_process_preview2] job queue exceeded!\n");
 }
@@ -932,6 +931,21 @@ static void _dev_add_history_item_ext(dt_develop_t *dev, dt_iop_module_t *module
   }
 }
 
+const dt_dev_history_item_t *dt_dev_get_history_item(dt_develop_t *dev, const char *op)
+{
+  for(GList *l = g_list_last(dev->history); l; l = g_list_previous(l))
+  {
+    dt_dev_history_item_t *item = (dt_dev_history_item_t *)l->data;
+    if(!g_strcmp0(item->op_name, op))
+    {
+      return item;
+      break;
+    }
+  }
+
+  return NULL;
+}
+
 void dt_dev_add_history_item_ext(dt_develop_t *dev, dt_iop_module_t *module, gboolean enable, const int no_image)
 {
   _dev_add_history_item_ext(dev, module, enable, FALSE, no_image, FALSE);
@@ -1246,12 +1260,7 @@ void dt_dev_pop_history_items(dt_develop_t *dev, int32_t cnt)
   }
   else
   {
-    dev->pipe->changed |= DT_DEV_PIPE_REMOVE;
-    dev->preview_pipe->changed |= DT_DEV_PIPE_REMOVE;
-    dev->preview2_pipe->changed |= DT_DEV_PIPE_REMOVE;
-    dev->pipe->cache_obsolete = 1;
-    dev->preview_pipe->cache_obsolete = 1;
-    dev->preview2_pipe->cache_obsolete = 1;
+    dt_dev_pixelpipe_rebuild(dev);
   }
 
   --darktable.gui->reset;
@@ -1433,11 +1442,10 @@ static gboolean _dev_auto_apply_presets(dt_develop_t *dev)
     return FALSE;
   }
 
-  gchar *workflow = dt_conf_get_string("plugins/darkroom/workflow");
+  const char *workflow = dt_conf_get_string_const("plugins/darkroom/workflow");
   const gboolean is_scene_referred = strcmp(workflow, "scene-referred") == 0;
   const gboolean is_display_referred = strcmp(workflow, "display-referred") == 0;
   const gboolean is_workflow_none = strcmp(workflow, "none") == 0;
-  g_free(workflow);
 
   //  Add scene-referred workflow
   //  Note that we cannot use a preset for FilmicRGB as the default values are
@@ -2044,9 +2052,11 @@ void dt_dev_read_history_ext(dt_develop_t *dev, const int imgid, gboolean no_ima
       flags = flags | (auto_apply_modules ? DT_HISTORY_HASH_AUTO : DT_HISTORY_HASH_BASIC);
     }
     dt_history_hash_write_from_history(imgid, flags);
-    // As we have a proper history right now and this is first_run we write the xmp now
+    // As we have a proper history right now and this is first_run we possibly write the xmp now
     dt_image_t *image = dt_image_cache_get(darktable.image_cache, imgid, 'w');
-    dt_image_cache_write_release(darktable.image_cache, image, DT_IMAGE_CACHE_SAFE);
+    // depending on the xmp_writing mode we either us safe or relaxed
+    const gboolean always = (dt_image_get_xmp_mode() == DT_WRITE_XMP_ALWAYS);
+    dt_image_cache_write_release(darktable.image_cache, image, always ? DT_IMAGE_CACHE_SAFE : DT_IMAGE_CACHE_RELAXED);
   }
   else if(legacy_params)
   {
