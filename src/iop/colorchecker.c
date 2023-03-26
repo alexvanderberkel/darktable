@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2016-2021 darktable developers.
+    Copyright (C) 2016-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -120,7 +120,7 @@ const char *aliases()
   return _("profile|lut|color grading");
 }
 
-const char *description(struct dt_iop_module_t *self)
+const char **description(struct dt_iop_module_t *self)
 {
   return dt_iop_set_description(self, _("perform color space corrections and apply looks"),
                                       _("corrective or creative"),
@@ -140,9 +140,12 @@ int flags()
   return IOP_FLAGS_SUPPORTS_BLENDING | IOP_FLAGS_ALLOW_TILING;
 }
 
-int default_colorspace(dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
+int default_colorspace(
+    dt_iop_module_t *self,
+    dt_dev_pixelpipe_t *pipe,
+    dt_dev_pixelpipe_iop_t *piece)
 {
-  return iop_cs_Lab;
+  return IOP_CS_LAB;
 }
 
 int legacy_params(
@@ -370,180 +373,110 @@ void init_presets(dt_iop_module_so_t *self)
   free(velvia_params);
 }
 
-// fast logarithms stolen from paul mineiro http://fastapprox.googlecode.com/svn/trunk/fastapprox/src/fastonebigheader.h
-#if 0//def __SSE2__
-#include <xmmintrin.h>
-
-typedef __m128 v4sf;
-typedef __m128i v4si;
-
-#define v4si_to_v4sf _mm_cvtepi32_ps
-#define v4sf_to_v4si _mm_cvttps_epi32
-
-#define v4sfl(x) ((const v4sf) { (x), (x), (x), (x) })
-#define v2dil(x) ((const v4si) { (x), (x) })
-#define v4sil(x) v2dil((((unsigned long long) (x)) << 32) | (x))
-static inline v4sf
-vfastlog2 (v4sf x)
-{
-  union { v4sf f; v4si i; } vx = { x };
-  union { v4si i; v4sf f; } mx; mx.i = (vx.i & v4sil (0x007FFFFF)) | v4sil (0x3f000000);
-  v4sf y = v4si_to_v4sf (vx.i);
-  y *= v4sfl (1.1920928955078125e-7f);
-
-  const v4sf c_124_22551499 = v4sfl (124.22551499f);
-  const v4sf c_1_498030302 = v4sfl (1.498030302f);
-  const v4sf c_1_725877999 = v4sfl (1.72587999f);
-  const v4sf c_0_3520087068 = v4sfl (0.3520887068f);
-
-  return y - c_124_22551499
-    - c_1_498030302 * mx.f
-    - c_1_725877999 / (c_0_3520087068 + mx.f);
-}
-
-static inline v4sf
-vfastlog (v4sf x)
-{
-  const v4sf c_0_69314718 = v4sfl (0.69314718f);
-  return c_0_69314718 * vfastlog2 (x);
-}
-
 // thinplate spline kernel \phi(r) = 2 r^2 ln(r)
-static inline v4sf kerneldist4(const float *x, const float *y)
-{
-  const float r2 =
-      (x[0]-y[0])*(x[0]-y[0])+
-      (x[1]-y[1])*(x[1]-y[1])+
-      (x[2]-y[2])*(x[2]-y[2]);
-  return r2 * fastlog(MAX(1e-8f,r2));
-}
+#if defined(_OPENMP)
+#pragma omp declare simd aligned(x, y)
 #endif
-
-// static inline float
-// fasterlog(float x)
-// {
-//   union { float f; uint32_t i; } vx = { x };
-//   float y = vx.i;
-//   y *= 8.2629582881927490e-8f;
-//   return y - 87.989971088f;
-// }
-
-// thinplate spline kernel \phi(r) = 2 r^2 ln(r)
-#if defined(_OPENMP) && defined(OPENMP_SIMD_)
-#pragma omp declare SIMD()
-#endif
-static inline float kernel(const float *x, const float *y)
+static inline float kernel(const dt_aligned_pixel_t x, const dt_aligned_pixel_t y)
 {
-  // return r*r*logf(MAX(1e-8f,r));
-  // well damnit, this speedup thing unfortunately shows severe artifacts.
-  // return r*r*fasterlog(MAX(1e-8f,r));
-  // this one seems to be a lot better, let's see how it goes:
-  const float r2 =
-      (x[0]-y[0])*(x[0]-y[0])+
-      (x[1]-y[1])*(x[1]-y[1])+
-      (x[2]-y[2])*(x[2]-y[2]);
+  dt_aligned_pixel_t diff2;
+  for_each_channel(c)
+  {
+    diff2[c] = (x[c] - y[c]);
+    diff2[c] *= diff2[c];
+  }
+  const float r2 = diff2[0] + diff2[1] + diff2[2];
   return r2*fastlog(MAX(1e-8f,r2));
 }
 
-void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const void *const ivoid,
-             void *const ovoid, const dt_iop_roi_t *const roi_in, const dt_iop_roi_t *const roi_out)
+void process(struct dt_iop_module_t *self,
+             dt_dev_pixelpipe_iop_t *piece,
+             const void *const ivoid,
+             void *const ovoid,
+             const dt_iop_roi_t *const roi_in,
+             const dt_iop_roi_t *const roi_out)
 {
+  if(!dt_iop_have_required_input_format(4 /*we need full-color pixels*/, self, piece->colors,
+                                        ivoid, ovoid, roi_in, roi_out))
+    return;
+
   const dt_iop_colorchecker_data_t *const data = (dt_iop_colorchecker_data_t *)piece->data;
-  const int ch = piece->colors;
+  const size_t npixels = (size_t)roi_out->height * (size_t)roi_out->width;
+  float *const restrict out = (float*)DT_IS_ALIGNED(ovoid);
+
+  // convert patch data from struct of arrays to array of structs so we can vectorize operations
+  const int num_patches = data->num_patches;
+  dt_aligned_pixel_t *sources = dt_alloc_align(64, sizeof(dt_aligned_pixel_t) * num_patches);
+  for(int i = 0; i < num_patches; i++)
+  {
+    sources[i][0] = data->source_Lab[3 * i];
+    sources[i][1] = data->source_Lab[3 * i + 1];
+    sources[i][2] = data->source_Lab[3 * i + 2];
+    sources[i][3] = 0.0f;
+  }
+  dt_aligned_pixel_t *patches = dt_alloc_align(64, sizeof(dt_aligned_pixel_t) * (num_patches + 1));
+  for(int i = 0; i <= num_patches; i++)
+  {
+    patches[i][0] = data->coeff_L[i];
+    patches[i][1] = data->coeff_a[i];
+    patches[i][2] = data->coeff_b[i];
+    patches[i][3] = 0.0f;
+  }
+  const dt_aligned_pixel_t polynomial_L =
+    { data->coeff_L[num_patches+1], data->coeff_L[num_patches+2], data->coeff_L[num_patches+3], 0.0f };
+  const dt_aligned_pixel_t polynomial_a =
+    { data->coeff_a[num_patches+1], data->coeff_a[num_patches+2], data->coeff_a[num_patches+3], 0.0f };
+  const dt_aligned_pixel_t polynomial_b =
+    { data->coeff_b[num_patches+1], data->coeff_b[num_patches+2], data->coeff_b[num_patches+3], 0.0f };
+
 #ifdef _OPENMP
 #pragma omp parallel for default(none) \
-  dt_omp_firstprivate(ch, data, ivoid, ovoid, roi_in, roi_out) \
-  schedule(static) \
-  collapse(2)
+  dt_omp_firstprivate(npixels, num_patches, patches, sources, polynomial_L, \
+                      polynomial_a, polynomial_b, ivoid, out)         \
+  schedule(static)
 #endif
-  for(int j=0;j<roi_out->height;j++)
+  for(int k=0; k < npixels; k++)
   {
-    for(int i=0;i<roi_out->width;i++)
+    dt_aligned_pixel_t inpx;
+    copy_pixel(inpx, ((float *)ivoid) + 4*k);
+
+    // polynomial part:
+    dt_aligned_pixel_t poly_L, poly_a, poly_b;
+    for_each_channel(c)
     {
-      const float *in = ((float *)ivoid) + (size_t)ch * (j * roi_in->width + i);
-      float *out = ((float *)ovoid) + (size_t)ch * (j * roi_in->width + i);
-      out[0] = data->coeff_L[data->num_patches];
-      out[1] = data->coeff_a[data->num_patches];
-      out[2] = data->coeff_b[data->num_patches];
-      // polynomial part:
-      out[0] += data->coeff_L[data->num_patches+1] * in[0] +
-                data->coeff_L[data->num_patches+2] * in[1] +
-                data->coeff_L[data->num_patches+3] * in[2];
-      out[1] += data->coeff_a[data->num_patches+1] * in[0] +
-                data->coeff_a[data->num_patches+2] * in[1] +
-                data->coeff_a[data->num_patches+3] * in[2];
-      out[2] += data->coeff_b[data->num_patches+1] * in[0] +
-                data->coeff_b[data->num_patches+2] * in[1] +
-                data->coeff_b[data->num_patches+3] * in[2];
-#if defined(_OPENMP) && defined(OPENMP_SIMD_) // <== nice try, i don't think this does anything here
-#pragma omp SIMD()
-#endif
-      for(int k=0;k<data->num_patches;k++)
-      { // rbf from thin plate spline
-        const float phi = kernel(in, data->source_Lab + 3*k);
-        out[0] += data->coeff_L[k] * phi;
-        out[1] += data->coeff_a[k] * phi;
-        out[2] += data->coeff_b[k] * phi;
-      }
+      poly_L[c] = (polynomial_L[c] * inpx[c]);
+      poly_a[c] = (polynomial_a[c] * inpx[c]);
+      poly_b[c] = (polynomial_b[c] * inpx[c]);
     }
+    dt_aligned_pixel_t sums = { poly_L[0] + poly_L[1] + poly_L[2],
+      				poly_a[0] + poly_a[1] + poly_a[2],
+                                poly_b[0] + poly_b[1] + poly_b[2],
+                                0.0f };
+    dt_aligned_pixel_t res;
+    for_each_channel(c)
+      res[c] = patches[num_patches][c] + sums[c];
+    for(int p=0; p < num_patches; p++)
+    {
+      // rbf from thin plate spline
+      const float phi = kernel(inpx, sources[p]);
+      for_each_channel(c)
+        res[c] += patches[p][c] * phi;
+    }
+    copy_pixel_nontemporal(out + 4*k, res);
   }
-  if(piece->pipe->mask_display & DT_DEV_PIXELPIPE_DISPLAY_MASK) dt_iop_alpha_copy(ivoid, ovoid, roi_out->width, roi_out->height);
+  dt_omploop_sfence();
+  dt_free_align(patches);
+  dt_free_align(sources);
 }
 
-#if 0 // TODO:
-void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const void *const ivoid,
-             void *const ovoid, const dt_iop_roi_t *const roi_in, const dt_iop_roi_t *const roi_out)
-{
-  const dt_iop_colorchecker_data_t *const data = (dt_iop_colorchecker_data_t *)piece->data;
-  const int ch = piece->colors;
-  // TODO: swizzle this so we can eval the distance of one point
-  // TODO: to four patches at the same time
-  v4sf source_Lab[data->num_patches];
-  for(int i=0;i<data->num_patches;i++)
-    source_Lab[i] = _mm_set_ps(1.0,
-        data->source_Lab[3*i+0],
-        data->source_Lab[3*i+1],
-        data->source_Lab[3*i+2]);
-#ifdef _OPENMP
-#pragma omp parallel for default(none) schedule(static) collapse(2)
-#endif
-  for(int j=0;j<roi_out->height;j++)
-  {
-    for(int i=0;i<roi_out->width;i++)
-    {
-      const float *in = ((float *)ivoid) + (size_t)ch * (j * roi_in->width + i);
-      float *out = ((float *)ovoid) + (size_t)ch * (j * roi_in->width + i);
-      // TODO: do this part in SSE (maybe need to store coeff_L in _mm128 on data struct)
-      out[0] = data->coeff_L[data->num_patches];
-      out[1] = data->coeff_a[data->num_patches];
-      out[2] = data->coeff_b[data->num_patches];
-      // polynomial part:
-      out[0] += data->coeff_L[data->num_patches+1] * in[0] +
-                data->coeff_L[data->num_patches+2] * in[1] +
-                data->coeff_L[data->num_patches+3] * in[2];
-      out[1] += data->coeff_a[data->num_patches+1] * in[0] +
-                data->coeff_a[data->num_patches+2] * in[1] +
-                data->coeff_a[data->num_patches+3] * in[2];
-      out[2] += data->coeff_b[data->num_patches+1] * in[0] +
-                data->coeff_b[data->num_patches+2] * in[1] +
-                data->coeff_b[data->num_patches+3] * in[2];
-      for(int k=0;k<data->num_patches;k+=4)
-      { // rbf from thin plate spline
-        const v4sf phi = kerneldist4(in, source_Lab[k]);
-        // TODO: add up 4x output channels
-        out[0] += data->coeff_L[k] * phi[0];
-        out[1] += data->coeff_a[k] * phi[0];
-        out[2] += data->coeff_b[k] * phi[0];
-      }
-    }
-  }
-  if(piece->pipe->mask_display & DT_DEV_PIXELPIPE_DISPLAY_MASK) dt_iop_alpha_copy(ivoid, ovoid, roi_out->width, roi_out->height);
-}
-#endif
 
 #ifdef HAVE_OPENCL
-int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_mem dev_in, cl_mem dev_out,
-               const dt_iop_roi_t *const roi_in, const dt_iop_roi_t *const roi_out)
+int process_cl(struct dt_iop_module_t *self,
+               dt_dev_pixelpipe_iop_t *piece,
+               cl_mem dev_in,
+               cl_mem dev_out,
+               const dt_iop_roi_t *const roi_in,
+               const dt_iop_roi_t *const roi_out)
 {
   dt_iop_colorchecker_data_t *d = (dt_iop_colorchecker_data_t *)piece->data;
   dt_iop_colorchecker_global_data_t *gd = (dt_iop_colorchecker_global_data_t *)self->global_data;
@@ -553,7 +486,7 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
   const int height = roi_out->height;
   const int num_patches = d->num_patches;
 
-  cl_int err = -999;
+  cl_int err = DT_OPENCL_DEFAULT_ERROR;
   cl_mem dev_params = NULL;
 
   const size_t params_size = (size_t)(4 * (2 * num_patches + 4)) * sizeof(float);
@@ -580,14 +513,8 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
   dev_params = dt_opencl_copy_host_to_device_constant(devid, params_size, params);
   if(dev_params == NULL) goto error;
 
-  size_t sizes[3] = { ROUNDUPWD(width), ROUNDUPHT(height), 1 };
-  dt_opencl_set_kernel_arg(devid, gd->kernel_colorchecker, 0, sizeof(cl_mem), (void *)&dev_in);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_colorchecker, 1, sizeof(cl_mem), (void *)&dev_out);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_colorchecker, 2, sizeof(int), (void *)&width);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_colorchecker, 3, sizeof(int), (void *)&height);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_colorchecker, 4, sizeof(int), (void *)&num_patches);
-  dt_opencl_set_kernel_arg(devid, gd->kernel_colorchecker, 5, sizeof(cl_mem), (void *)&dev_params);
-  err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_colorchecker, sizes);
+  err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_colorchecker, width, height,
+    CLARG(dev_in), CLARG(dev_out), CLARG(width), CLARG(height), CLARG(num_patches), CLARG(dev_params));
   if(err != CL_SUCCESS) goto error;
 
   dt_opencl_release_mem_object(dev_params);
@@ -597,13 +524,15 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
 error:
   free(params);
   dt_opencl_release_mem_object(dev_params);
-  dt_print(DT_DEBUG_OPENCL, "[opencl_colorchecker] couldn't enqueue kernel! %d\n", err);
+  dt_print(DT_DEBUG_OPENCL, "[opencl_colorchecker] couldn't enqueue kernel! %s\n", cl_errstr(err));
   return FALSE;
 }
 #endif
 
 
-void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pixelpipe_t *pipe,
+void commit_params(struct dt_iop_module_t *self,
+                   dt_iop_params_t *p1,
+                   dt_dev_pixelpipe_t *pipe,
                    dt_dev_pixelpipe_iop_t *piece)
 {
   dt_iop_colorchecker_params_t *p = (dt_iop_colorchecker_params_t *)p1;
@@ -787,7 +716,7 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pix
         A[j*N4+i] = 0;
     // make coefficient matrix triangular
     int *pivot = malloc(sizeof(*pivot) * N4);
-    if (gauss_make_triangular(A, pivot, N4))
+    if(gauss_make_triangular(A, pivot, N4))
     {
       // calculate coefficients for L channel
       for(int i=0;i<N;i++) b[i] = p->target_L[i];
@@ -813,12 +742,16 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pix
   }
 }
 
-void init_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
+void init_pipe(struct dt_iop_module_t *self,
+               dt_dev_pixelpipe_t *pipe,
+               dt_dev_pixelpipe_iop_t *piece)
 {
   piece->data = malloc(sizeof(dt_iop_colorchecker_data_t));
 }
 
-void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
+void cleanup_pipe(struct dt_iop_module_t *self,
+                  dt_dev_pixelpipe_t *pipe,
+                  dt_dev_pixelpipe_iop_t *piece)
 {
   free(piece->data);
   piece->data = NULL;
@@ -1110,7 +1043,8 @@ static gboolean checker_draw(GtkWidget *widget, cairo_t *crf, gpointer user_data
 
   GtkAllocation allocation;
   gtk_widget_get_allocation(widget, &allocation);
-  int width = allocation.width, height = allocation.height;
+  const int width = allocation.width;
+  const int height = allocation.height;
   cairo_surface_t *cst = dt_cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
   cairo_t *cr = cairo_create(cst);
   // clear bg
@@ -1161,18 +1095,21 @@ static gboolean checker_draw(GtkWidget *widget, cairo_t *crf, gpointer user_data
     }
   }
 
-  const int draw_i = g->drawn_patch % cells_x;
-  const int draw_j = g->drawn_patch / cells_x;
-  float color = 1.0;
-  if(p->source_L[g->drawn_patch] > 80) color = 0.0;
-  cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(2.));
-  cairo_set_source_rgb(cr, color, color, color);
-  cairo_rectangle(cr,
-      width * draw_i / (float) cells_x + DT_PIXEL_APPLY_DPI(5),
-      height * draw_j / (float) cells_y + DT_PIXEL_APPLY_DPI(5),
-      width / (float) cells_x - DT_PIXEL_APPLY_DPI(11),
-      height / (float) cells_y - DT_PIXEL_APPLY_DPI(11));
-  cairo_stroke(cr);
+  if(g->drawn_patch != -1)
+  {
+    const int draw_i = g->drawn_patch % cells_x;
+    const int draw_j = g->drawn_patch / cells_x;
+    float color = 1.0;
+    if(p->source_L[g->drawn_patch] > 80) color = 0.0;
+    cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(2.));
+    cairo_set_source_rgb(cr, color, color, color);
+    cairo_rectangle(cr,
+                    width * draw_i / (float) cells_x + DT_PIXEL_APPLY_DPI(5),
+                    height * draw_j / (float) cells_y + DT_PIXEL_APPLY_DPI(5),
+                    width / (float) cells_x - DT_PIXEL_APPLY_DPI(11),
+                    height / (float) cells_y - DT_PIXEL_APPLY_DPI(11));
+    cairo_stroke(cr);
+  }
 
   cairo_destroy(cr);
   cairo_set_source_surface(crf, cst, 0, 0);
@@ -1181,7 +1118,9 @@ static gboolean checker_draw(GtkWidget *widget, cairo_t *crf, gpointer user_data
   return TRUE;
 }
 
-static gboolean checker_motion_notify(GtkWidget *widget, GdkEventMotion *event,
+static gboolean checker_motion_notify(
+    GtkWidget *widget,
+    GdkEventMotion *event,
     gpointer user_data)
 {
   // highlight?
@@ -1208,7 +1147,7 @@ static gboolean checker_motion_notify(GtkWidget *widget, GdkEventMotion *event,
       _("(%2.2f %2.2f %2.2f)\n"
         "altered patches are marked with an outline\n"
         "click to select\n"
-        "double click to reset\n"
+        "double-click to reset\n"
         "right click to delete patch\n"
         "shift+click while color picking to replace patch"),
       p->source_L[patch], p->source_a[patch], p->source_b[patch]);
@@ -1216,8 +1155,9 @@ static gboolean checker_motion_notify(GtkWidget *widget, GdkEventMotion *event,
   return TRUE;
 }
 
-static gboolean checker_button_press(GtkWidget *widget, GdkEventButton *event,
-                                                    gpointer user_data)
+static gboolean checker_button_press(
+    GtkWidget *widget, GdkEventButton *event,
+    gpointer user_data)
 {
   dt_iop_module_t *self = (dt_iop_module_t *)user_data;
   dt_iop_colorchecker_gui_data_t *g = (dt_iop_colorchecker_gui_data_t *)self->gui_data;
@@ -1289,7 +1229,7 @@ static gboolean checker_button_press(GtkWidget *widget, GdkEventButton *event,
     }
     if(new_color_valid)
     {
-      if(p->num_patches < 24 && (patch < 0 || patch >= p->num_patches))
+      if(p->num_patches < MAX_PATCHES && (patch < 0 || patch >= p->num_patches))
       {
         p->num_patches = MIN(MAX_PATCHES, p->num_patches + 1);
         patch = p->num_patches - 1;
@@ -1314,12 +1254,6 @@ static gboolean checker_button_press(GtkWidget *widget, GdkEventButton *event,
   return FALSE;
 }
 
-static gboolean checker_leave_notify(GtkWidget *widget, GdkEventCrossing *event,
-                                                    gpointer user_data)
-{
-  return FALSE; // ?
-}
-
 void gui_init(struct dt_iop_module_t *self)
 {
   dt_iop_colorchecker_gui_data_t *g = IOP_GUI_ALLOC(colorchecker);
@@ -1337,7 +1271,6 @@ void gui_init(struct dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(g->area), "draw", G_CALLBACK(checker_draw), self);
   g_signal_connect(G_OBJECT(g->area), "button-press-event", G_CALLBACK(checker_button_press), self);
   g_signal_connect(G_OBJECT(g->area), "motion-notify-event", G_CALLBACK(checker_motion_notify), self);
-  g_signal_connect(G_OBJECT(g->area), "leave-notify-event", G_CALLBACK(checker_leave_notify), self);
 
   g->patch = 0;
   g->drawn_patch = -1;
@@ -1353,25 +1286,25 @@ void gui_init(struct dt_iop_module_t *self)
 
   dt_color_picker_new(self, DT_COLOR_PICKER_POINT_AREA, g->combobox_patch);
 
-  g->scale_L = dt_bauhaus_slider_new_with_range(self, -100.0, 200.0, 1.0, 0.0f, 2);
+  g->scale_L = dt_bauhaus_slider_new_with_range(self, -100.0, 200.0, 0, 0.0f, 2);
   gtk_widget_set_tooltip_text(g->scale_L, _("adjust target color Lab 'L' channel\nlower values darken target color while higher brighten it"));
   dt_bauhaus_widget_set_label(g->scale_L, NULL, N_("lightness"));
 
-  g->scale_a = dt_bauhaus_slider_new_with_range(self, -256.0, 256.0, 1.0, 0.0f, 2);
+  g->scale_a = dt_bauhaus_slider_new_with_range(self, -256.0, 256.0, 0, 0.0f, 2);
   gtk_widget_set_tooltip_text(g->scale_a, _("adjust target color Lab 'a' channel\nlower values shift target color towards greens while higher shift towards magentas"));
   dt_bauhaus_widget_set_label(g->scale_a, NULL, N_("green-magenta offset"));
   dt_bauhaus_slider_set_stop(g->scale_a, 0.0, 0.0, 1.0, 0.2);
   dt_bauhaus_slider_set_stop(g->scale_a, 0.5, 1.0, 1.0, 1.0);
   dt_bauhaus_slider_set_stop(g->scale_a, 1.0, 1.0, 0.0, 0.2);
 
-  g->scale_b = dt_bauhaus_slider_new_with_range(self, -256.0, 256.0, 1.0, 0.0f, 2);
+  g->scale_b = dt_bauhaus_slider_new_with_range(self, -256.0, 256.0, 0, 0.0f, 2);
   gtk_widget_set_tooltip_text(g->scale_b, _("adjust target color Lab 'b' channel\nlower values shift target color towards blues while higher shift towards yellows"));
   dt_bauhaus_widget_set_label(g->scale_b, NULL, N_("blue-yellow offset"));
   dt_bauhaus_slider_set_stop(g->scale_b, 0.0, 0.0, 0.0, 1.0);
   dt_bauhaus_slider_set_stop(g->scale_b, 0.5, 1.0, 1.0, 1.0);
   dt_bauhaus_slider_set_stop(g->scale_b, 1.0, 1.0, 1.0, 0.0);
 
-  g->scale_C = dt_bauhaus_slider_new_with_range(self, -128.0, 128.0, 1.0f, 0.0f, 2);
+  g->scale_C = dt_bauhaus_slider_new_with_range(self, -128.0, 128.0, 0, 0.0f, 2);
   gtk_widget_set_tooltip_text(g->scale_C, _("adjust target color saturation\nadjusts 'a' and 'b' channels of target color in Lab space simultaneously\nlower values scale towards lower saturation while higher scale towards higher saturation"));
   dt_bauhaus_widget_set_label(g->scale_C, NULL, N_("saturation"));
 
@@ -1399,6 +1332,8 @@ void gui_init(struct dt_iop_module_t *self)
 
 #undef MAX_PATCHES
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

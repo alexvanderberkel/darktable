@@ -41,14 +41,15 @@ static inline __m128 _mm_exp2_ps(__m128 x)
   __m128i ipart;
   __m128 fpart, expipart, expfpart;
 
+  /* clamp the exponent to the suppported range */
   x = _mm_min_ps(x, _mm_set1_ps(129.00000f));
   x = _mm_max_ps(x, _mm_set1_ps(-126.99999f));
 
   /* ipart = int(x - 0.5) */
-  ipart = _mm_cvtps_epi32(_mm_sub_ps(x, _mm_set1_ps(0.5f)));
+  ipart = _mm_cvtps_epi32(x - _mm_set1_ps(0.5f));
 
   /* fpart = x - ipart */
-  fpart = _mm_sub_ps(x, _mm_cvtepi32_ps(ipart));
+  fpart = x - _mm_cvtepi32_ps(ipart);
 
   /* expipart = (float) (1 << ipart) */
   expipart = _mm_castsi128_ps(_mm_slli_epi32(_mm_add_epi32(ipart, _mm_set1_epi32(127)), 23));
@@ -110,9 +111,7 @@ static inline __m128 _mm_log2_ps(__m128 x)
 #endif
 
   /* This effectively increases the polynomial degree by one, but ensures that log2(1) == 0*/
-  logmant = _mm_mul_ps(logmant, _mm_sub_ps(mant, one));
-
-  return _mm_add_ps(logmant, exp);
+  return (logmant * (mant - one)) + exp;
 }
 
 static inline __m128 _mm_pow_ps(__m128 x, __m128 y)
@@ -141,6 +140,9 @@ static inline float _mm_vectorGetByIndex( __m128 V, unsigned int i)
   return converter.a[i];
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-space on;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

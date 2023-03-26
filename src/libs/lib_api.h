@@ -77,7 +77,7 @@ OPTIONAL(int, button_pressed, struct dt_lib_module_t *self, double x, double y, 
                    uint32_t state);
 OPTIONAL(int, scrolled, struct dt_lib_module_t *self, double x, double y, int up);
 OPTIONAL(void, configure, struct dt_lib_module_t *self, int width, int height);
-OPTIONAL(int, position, );
+OPTIONAL(int, position, const struct dt_lib_module_t *self);
 
 /** implement these three if you want customizable presets to be stored in db. */
 /** legacy_params can run in iterations, just return to what version you updated the preset. */
@@ -91,10 +91,6 @@ OPTIONAL(void, set_preferences, void *menu, struct dt_lib_module_t *self);
 /** check if the module can autoapply presets. Default is FALSE */
 DEFAULT(gboolean, preset_autoapply, struct dt_lib_module_t *self);
 
-/** Optional callbacks for keyboard accelerators */
-OPTIONAL(void, init_key_accels, struct dt_lib_module_t *self);
-OPTIONAL(void, connect_key_accels, struct dt_lib_module_t *self);
-
 #ifdef FULL_API_H
 
 #pragma GCC visibility pop
@@ -105,6 +101,8 @@ OPTIONAL(void, connect_key_accels, struct dt_lib_module_t *self);
 
 #endif // FULL_API_H
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

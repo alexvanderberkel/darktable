@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2021 darktable developers.
+    Copyright (C) 2022-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -17,12 +17,12 @@
 */
 
 /*
-  eucledian distance transform for darktable Hanno Schwalm (hanno@schwalm-bremen.de) 2021/09  
+  eucledian distance transform for darktable Hanno Schwalm (hanno@schwalm-bremen.de) 2021/09
    - adopted to C
    - omp support
-   - reduced alloc/free using dt_alloc_align variants for better debug support 
+   - reduced alloc/free using dt_alloc_align variants for better debug support
    - tuned for performance in collaboration with Ingo Weyrich (heckflosse67@gmx.de) from rawtherapee
-  
+
   The original code is from:
 
   *** Original copyright note ***
@@ -30,7 +30,7 @@
 
   Distance Transforms of Sampled Functions
   Pedro F. Felzenszwalb and Daniel P. Huttenlocher
-  Cornell Computing and Information Science TR2004-1963 
+  Cornell Computing and Information Science TR2004-1963
   Copyright (C) 2006 Pedro Felzenszwalb
 
   This program is free software; you can redistribute it and/or modify
@@ -50,14 +50,6 @@
         will fill in the zeros / DT_DISTANCE_TRANSFORM_MAX
    The returned float of this function is the maximum calculated distance
 */
-
-#include "common/imagebuf.h"
-
-// We don't want to use the SIMD version as we might access unaligned memory
-static inline float sqrf(float a)
-{
-  return a * a;
-}
 
 typedef enum dt_distance_transform_t
 {
@@ -97,7 +89,7 @@ static void _image_distance_transform(const float *f, float *z, float *d, int *v
   }
 }
 
-float dt_image_distance_transform(float *const restrict src, float *const restrict out, const size_t width, const size_t height, const float clip, const dt_distance_transform_t mode)
+float dt_image_distance_transform(float *const src, float *const out, const size_t width, const size_t height, const float clip, const dt_distance_transform_t mode)
 {
   switch(mode)
   {
@@ -105,17 +97,17 @@ float dt_image_distance_transform(float *const restrict src, float *const restri
       break;
     case DT_DISTANCE_TRANSFORM_MASK:
 #ifdef _OPENMP
-  #pragma omp parallel for simd default(none) \
+  #pragma omp parallel for default(none) \
   dt_omp_firstprivate(src, out) \
   dt_omp_sharedconst(clip, width, height) \
-  schedule(static) aligned(src, out : 64)
+  schedule(static)
 #endif
       for(size_t i = 0; i < width * height; i++)
         out[i] = (src[i] < clip) ? 0.0f : DT_DISTANCE_TRANSFORM_MAX;
       break;
     default:
       dt_iop_image_fill(out, 0.0f, width, height, 1);
-      fprintf(stderr,"[dt_image_distance_transform] called with unsupported mode %i\n", mode);
+      dt_print(DT_DEBUG_ALWAYS,"[dt_image_distance_transform] called with unsupported mode %i\n", mode);
       return 0.0f;
   }
 
@@ -129,13 +121,13 @@ float dt_image_distance_transform(float *const restrict src, float *const restri
 #endif
   {
     float *f = dt_alloc_align_float(maxdim);
-    float *z = dt_alloc_align_float(maxdim + 1); 
+    float *z = dt_alloc_align_float(maxdim + 1);
     float *d = dt_alloc_align_float(maxdim);
     int *v = dt_alloc_align(64, maxdim * sizeof (int));
 
     // transform along columns
 #ifdef _OPENMP
-  #pragma omp for schedule(simd:static)
+  #pragma omp for schedule (static)
 #endif
     for(size_t x = 0; x < width; x++)
     {
@@ -148,7 +140,7 @@ float dt_image_distance_transform(float *const restrict src, float *const restri
     // implicit barrier :-)
     // transform along rows
 #ifdef _OPENMP
-  #pragma omp for schedule(simd:static) nowait
+  #pragma omp for schedule (static) nowait
 #endif
     for(size_t y = 0; y < height; y++)
     {
@@ -167,4 +159,10 @@ float dt_image_distance_transform(float *const restrict src, float *const restri
   }
   return max_distance;
 }
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
+// vim: shiftwidth=2 expandtab tabstop=2 cindent
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
 

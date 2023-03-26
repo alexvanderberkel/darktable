@@ -22,6 +22,10 @@
 #include <sqlite3.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
 typedef struct dt_tag_t
 {
   guint id;
@@ -39,7 +43,7 @@ typedef enum dt_tag_flags_t
   DT_TF_CATEGORY    = 1 << 0, // this tag (or path) is not a keyword to be exported
   DT_TF_PRIVATE     = 1 << 1, // this tag is private. Will be exported only on demand
   DT_TF_ORDER_SET   = 1 << 2, // set if the tag has got an images order
-  DT_TF_DESCENDING  = 1 << 31,
+  DT_TF_DESCENDING  = 1U << 31,
 } dt_tag_flags_t;
 
 #define DT_TF_ALL (DT_TF_CATEGORY | DT_TF_PRIVATE | DT_TF_ORDER_SET)
@@ -195,20 +199,19 @@ uint32_t dt_tag_images_count(gint tagid);
 /** retrieves the subtags of requested level for the requested category */
 char *dt_tag_get_subtags(const gint imgid, const char *category, const int level);
 
-/** return the images order associated to that tag */
-gboolean dt_tag_get_tag_order_by_id(const uint32_t tagid, uint32_t *sort,
-                                          gboolean *descending);
-
-/** save the images order on the tag */
-void dt_tag_set_tag_order_by_id(const uint32_t tagid, const uint32_t sort,
-                                const gboolean descending);
-
 /** return the tagid of that tag - follow tag sensitivity - return 0 if not found*/
 uint32_t dt_tag_get_tag_id_by_name(const char * const name);
 
 /** init the darktable tags table */
 void dt_set_darktable_tags();
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+#ifdef __cplusplus
+} // extern "C"
+#endif /* __cplusplus */
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

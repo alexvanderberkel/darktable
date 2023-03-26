@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2017-2021 darktable developers.
+    Copyright (C) 2017-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -22,55 +22,38 @@
 #include "control/control.h"     // needed by dwt.h
 #include "common/dwt.h"          // for dwt_interleave_rows
 #include <math.h>
-#if defined(__SSE__)
-#include <xmmintrin.h>
-#endif
 
-static inline void weight(const float *c1, const float *c2, const float sharpen, dt_aligned_pixel_t weight)
+static inline void weight(const dt_aligned_pixel_t c1,
+                              const dt_aligned_pixel_t c2,
+                              const dt_aligned_pixel_t sharpen,
+                              dt_aligned_pixel_t weight)
 {
-  dt_aligned_pixel_t square;
-  for_each_channel(c) square[c] = c1[c] - c2[c];
-  for_each_channel(c) square[c] = square[c] * square[c];
-
-  const float wl = dt_fast_expf(-sharpen * square[0]);
-  const float wc = dt_fast_expf(-sharpen * (square[1] + square[2]));
-
-  weight[0] = wl;
-  weight[1] = wc;
-  weight[2] = wc;
-  weight[3] = 1.0f;
-}
-
-#if defined(__SSE2__)
 /* Computes the vector
  * (wl, wc, wc, 1)
  *
  * where:
  * wl = exp(-sharpen*SQR(c1[0] - c2[0]))
- *    = exp(-s*d1) (as noted in code comments below)
  * wc = exp(-sharpen*(SQR(c1[1] - c2[1]) + SQR(c1[2] - c2[2]))
- *    = exp(-s*(d2+d3)) (as noted in code comments below)
  */
-static const __m128 o111 DT_ALIGNED_ARRAY = { ~0, ~0, ~0, 0 };
-static inline __m128 weight_sse2(const __m128 *c1, const __m128 *c2, const float sharpen)
-{
-  const __m128 diff = *c1 - *c2;
-  const __m128 square = diff * diff;                                // (?, d3, d2, d1)
-  const __m128 square2 = _mm_shuffle_ps(square, square, _MM_SHUFFLE(3, 1, 2, 0)); // (?, d2, d3, d1)
-  __m128 added = square + square2;                                  // (?, d2+d3, d2+d3, 2*d1)
-  added = _mm_sub_ss(added, square);                                // (?, d2+d3, d2+d3, d1)
-  __m128 sharpened = added * _mm_set1_ps(-sharpen);                 // (?, -s*(d2+d3), -s*(d2+d3), -s*d1)
-  sharpened = _mm_and_ps(sharpened,o111);			    // (0, -s*(d2+d3), -s*(d2+d3), -s*d1)
-  return dt_fast_expf_sse2(sharpened);                              // (1, wc, wc, wl)
+  dt_aligned_pixel_t square;
+  for_each_channel(c) square[c] = c1[c] - c2[c];
+  for_each_channel(c) square[c] = square[c] * square[c];	// { d1, d2, d3, ? }
+  const dt_aligned_pixel_t square2 = { square[0], square[2], square[1], square[3] }; // { d1, d3, d2, ? }
+  dt_aligned_pixel_t added;
+  for_each_channel(c)
+    added[c] = square[c] + square2[c];				// { d1+d1, d2+d3, d2+d3, ? }
+  dt_aligned_pixel_t sharpened;
+  for_each_channel(c)
+    sharpened[c] = sharpen[c] * added[c];			// { -s*d1,  -s*(d2+d3), -s*(d2+d3), 0 }
+  dt_vector_exp(sharpened, weight);				// { wl, wc, wc, 1 }
 }
-#endif
 
 #define SUM_PIXEL_CONTRIBUTION(ii, jj) 		                                                             \
   do                                                                                                         \
   {                                                                                                          \
     const float f = filter[(ii)] * filter[(jj)];                                                             \
     dt_aligned_pixel_t wp;                                                                                   \
-    weight(px, px2, sharpen, wp);                                                                            \
+    weight(px, px2, vsharpen, wp);                                                                           \
     dt_aligned_pixel_t w;                                                                                    \
     dt_aligned_pixel_t pd;                                                                                   \
     for_four_channels(c,aligned(px2))                                                                        \
@@ -82,51 +65,22 @@ static inline __m128 weight_sse2(const __m128 *c1, const __m128 *c2, const float
     }                                                                                                        \
   } while(0)
 
-#if defined(__SSE__)
-#define SUM_PIXEL_CONTRIBUTION_SSE(ii, jj)	                                                             \
-  do                                                                                                         \
-  {                                                                                                          \
-    const float f = filter[(ii)] * filter[(jj)];	                                                     \
-    const __m128 wp = weight_sse2(px, px2, sharpen);                                                         \
-    const __m128 w = f * wp;                                                                                 \
-    const __m128 pd = *px2 * w;                                                                              \
-    sum = sum + pd;                                                                                          \
-    wgt = wgt + w;                                                                                           \
-  } while(0)
-#endif
-
 #define SUM_PIXEL_PROLOGUE                                                                                   \
   dt_aligned_pixel_t sum = { 0.0f, 0.0f, 0.0f, 0.0f };                                                       \
   dt_aligned_pixel_t wgt = { 0.0f, 0.0f, 0.0f, 0.0f };
 
-#if defined(__SSE2__)
-#define SUM_PIXEL_PROLOGUE_SSE                                                                               \
-  __m128 sum = _mm_setzero_ps();                                                                             \
-  __m128 wgt = _mm_setzero_ps();
-#endif
-
 #define SUM_PIXEL_EPILOGUE                                                                                   \
+  dt_aligned_pixel_t det;                                               				     \
   for_each_channel(c)      										     \
   {													     \
     sum[c] /= wgt[c];                                                   				     \
-    pcoarse[c] = sum[c];                                                                                     \
-    const float det = (px[c] - sum[c]);									     \
-    pdetail[c] = det;    		                                              			     \
+    det[c] = (px[c] - sum[c]);									     \
   }                                                                       				     \
+  copy_pixel_nontemporal(pcoarse,sum);                                  				     \
+  copy_pixel_nontemporal(pdetail,det);                                  				     \
   px += 4;                                                                                                   \
   pdetail += 4;                                                                                              \
   pcoarse += 4;
-
-#if defined(__SSE2__)
-#define SUM_PIXEL_EPILOGUE_SSE                                                                               \
-  sum = sum / wgt;                                                                                           \
-                                                                                                             \
-  _mm_stream_ps(pdetail, *px - sum);                                                                         \
-  _mm_stream_ps(pcoarse, sum);                                                                               \
-  px++;                                                                                                      \
-  pdetail += 4;                                                                                              \
-  pcoarse += 4;
-#endif
 
 void eaw_decompose(float *const restrict out, const float *const restrict in, float *const restrict detail,
                    const int scale, const float sharpen, const int32_t width, const int32_t height)
@@ -134,10 +88,11 @@ void eaw_decompose(float *const restrict out, const float *const restrict in, fl
   const int mult = 1 << scale;
   static const float filter[5] = { 1.0f / 16.0f, 4.0f / 16.0f, 6.0f / 16.0f, 4.0f / 16.0f, 1.0f / 16.0f };
   const int boundary = 2 * mult;
+  const dt_aligned_pixel_t vsharpen = { -0.5f * sharpen, -sharpen, -sharpen, 0.0f };
 
 #ifdef _OPENMP
 #pragma omp parallel for default(none) \
-  dt_omp_firstprivate(detail, filter, height, in, sharpen, mult, boundary, out, width) \
+  dt_omp_firstprivate(detail, filter, height, in, vsharpen, mult, boundary, out, width) \
   schedule(static)
 #endif
   for(int rowid = 0; rowid < height; rowid++)
@@ -211,145 +166,35 @@ void eaw_decompose(float *const restrict out, const float *const restrict in, fl
   }
 }
 
-#if defined(__SSE2__)
-void eaw_decompose_sse2(float *const restrict out, const float *const restrict in, float *const restrict detail,
-                        const int scale, const float sharpen, const int32_t width, const int32_t height)
-{
-  const int mult = 1 << scale;
-  static const float filter[5] = { 1.0f / 16.0f, 4.0f / 16.0f, 6.0f / 16.0f, 4.0f / 16.0f, 1.0f / 16.0f };
-  const int boundary = 2 * mult;
-
-#ifdef _OPENMP
-#pragma omp parallel for default(none) \
-  dt_omp_firstprivate(detail, filter, height, in, sharpen, mult, boundary, out, width) \
-  schedule(static)
-#endif
-  for(int rowid = 0; rowid < height; rowid++)
-  {
-    const size_t j = dwt_interleave_rows(rowid, height, mult);
-    const __m128 *px = ((__m128 *)in) + (size_t)j * width;
-    const __m128 *px2;
-    float *pdetail = detail + (size_t)4 * j * width;
-    float *pcoarse = out + (size_t)4 * j * width;
-
-    // for the first and last 'boundary' rows, we have to use the macros with tests for the entire row;
-    //   for the central bulk, we only need to use those slower versions on the leftmost and rightmost pixels
-    const int lbound = (j < boundary || j >= height - boundary) ? width-boundary : boundary;
-
-    /* The first "2*mult" pixels need a boundary check because we might try to access past the left edge,
-     * which requires nearest pixel interpolation */
-    int i;
-    for(i = 0; i < lbound; i++)
-    {
-      SUM_PIXEL_PROLOGUE_SSE;
-      for(int jj = 0; jj < 5; jj++)
-      {
-        const int y = j + mult * (jj-2);
-        const int clamp_y = CLAMP(y,0,height-1);
-        for(int ii = 0; ii < 5; ii++)
-        {
-          int x = i + mult * ((ii)-2);
-          if(x < 0) x = 0;			// we might be looking beyond the left edge
-          px2 = ((__m128 *)in) + x + (size_t)clamp_y * width;
-          SUM_PIXEL_CONTRIBUTION_SSE(ii, jj);
-        }
-      }
-      SUM_PIXEL_EPILOGUE_SSE;
-    }
-
-    /* For pixels [2*mult, width-2*mult], we don't need to do any boundary checks */
-    for( ; i < width - boundary; i++)
-    {
-      SUM_PIXEL_PROLOGUE_SSE;
-      px2 = ((__m128 *)in) + i - 2 * mult + (size_t)(j - 2 * mult) * width;
-      for(int jj = 0; jj < 5; jj++)
-      {
-        for(int ii = 0; ii < 5; ii++)
-        {
-          SUM_PIXEL_CONTRIBUTION_SSE(ii, jj);
-          px2 += mult;
-        }
-        px2 += (width - 5) * mult;
-      }
-      SUM_PIXEL_EPILOGUE_SSE;
-    }
-
-    /* Last 2*mult pixels in the row require the boundary check again */
-    for( ; i < width; i++)
-    {
-      SUM_PIXEL_PROLOGUE_SSE;
-      for(int jj = 0; jj < 5; jj++)
-      {
-        const int y = j + mult * (jj-2);
-        const int clamp_y = CLAMP(y,0,height-1);
-        for(int ii = 0; ii < 5; ii++)
-        {
-          int x = i + mult * ((ii)-2);
-          if(x >= width) x = width-1;		// we might be looking beyond the right edge
-          px2 = ((__m128 *)in) + x + (size_t)clamp_y * width;
-          SUM_PIXEL_CONTRIBUTION_SSE(ii, jj);
-        }
-      }
-      SUM_PIXEL_EPILOGUE_SSE;
-    }
-  }
-  _mm_sfence();
-}
-#endif
-
 void eaw_synthesize(float *const out, const float *const in, const float *const restrict detail,
                     const float *const restrict threshold, const float *const restrict boost,
                     const int32_t width, const int32_t height)
 {
+  const dt_aligned_pixel_t thresh = { threshold[0], threshold[1], threshold[2], threshold[3] };
+  const dt_aligned_pixel_t boostval = { boost[0], boost[1], boost[2], boost[3] };
+  const size_t npixels = (size_t)width * height;
+
 #ifdef _OPENMP
-#pragma omp parallel for default(none) \
-  dt_omp_firstprivate(height, width) \
-  dt_omp_sharedconst(in, out, detail, threshold, boost) \
+#pragma omp parallel for simd default(none) \
+  dt_omp_firstprivate(in, out, detail, npixels, thresh, boostval)       \
   schedule(simd:static)
 #endif
-  for(size_t k = 0; k < (size_t)width * height; k++)
+  for(size_t k = 0; k < npixels; k++)
   {
-#ifdef _OPENMP
-#pragma omp simd simdlen(4) aligned(detail, in, out, threshold, boost)
-#endif
-    for(size_t c = 0; c < 4; c++)
+    dt_aligned_pixel_t synth;
+    for_four_channels(c,aligned(in,detail))
     {
       // decrease the absolute magnitude of the detail by the threshold; copysignf does not vectorize, but it
       // turns out that just adding up two clamped alternatives gives exactly the same result and DOES vectorize
       //const float absamt = fmaxf(0.0f, (fabsf(detail[k + c]) - threshold[c]));
       //const float amount = copysignf(absamt, detail[k + c]);
-      const float amount = MAX(detail[4*k+c] - threshold[c], 0.0f) + MIN(detail[4*k+c] + threshold[c], 0.0f);
-      out[4*k + c] = in[4*k + c] + (boost[c] * amount);
+      const float amount = MAX(detail[4*k+c] - thresh[c], 0.0f) + MIN(detail[4*k+c] + thresh[c], 0.0f);
+      synth[c] = in[4*k + c] + (boostval[c] * amount);
     }
+    copy_pixel_nontemporal(out + 4*k, synth);
   }
+  dt_omploop_sfence();
 }
-
-#if defined(__SSE2__)
-void eaw_synthesize_sse2(float *const out, const float *const in, const float *const restrict detail,
-                         const float *const restrict thrsf, const float *const restrict boostf,
-                         const int32_t width, const int32_t height)
-{
-  const __m128 threshold = _mm_load_ps(thrsf);
-  const __m128 boost = _mm_load_ps(boostf);
-  const __m128i maski = _mm_set1_epi32(0x80000000u);
-  const __m128 *mask = (__m128 *)&maski;
-
-#ifdef _OPENMP
-#pragma omp parallel for default(none) \
-  dt_omp_firstprivate(boost, detail, height, in, out, threshold, width, maski, mask) \
-  schedule(static)
-#endif
-  for(size_t j = 0; j < (size_t)width * height; j++)
-  {
-    const __m128 *pin = (__m128 *)in + j;
-    const __m128 *pdetail = (__m128 *)detail + j;
-    const __m128 absamt = _mm_max_ps(_mm_setzero_ps(), _mm_andnot_ps(*mask, *pdetail) - threshold);
-    const __m128 amount = _mm_or_ps(_mm_and_ps(*pdetail, *mask), absamt);
-    _mm_stream_ps(out + 4*j, *pin + boost * amount);
-  }
-  _mm_sfence();
-}
-#endif
 
 // =====================================================================================
 // begin wavelet code from denoiseprofile.c
@@ -371,27 +216,8 @@ static inline float dn_weight(const float *c1, const float *c2, const float inv_
   return fast_mexp2f(MAX(0, dot * var - off2));
 }
 
-#if defined(__SSE__)
-static inline float dn_weight_sse(const __m128 *c1, const __m128 *c2, const float inv_sigma2)
-{
-  // 3d distance based on color
-  const __m128 diff = _mm_sub_ps(*c1, *c2);
-  const __m128 sqr = _mm_mul_ps(diff, diff);
-  const float dot = (sqr[0] + sqr[1] + sqr[2]) * inv_sigma2;
-  const float var
-      = 0.02f; // FIXME: this should ideally depend on the image before noise stabilizing transforms!
-  const float off2 = 9.0f; // (3 sigma)^2
-  return fast_mexp2f(MAX(0, dot * var - off2));
-}
-#endif
-
 typedef struct _aligned_pixel {
-  union {
-    dt_aligned_pixel_t v;
-#ifdef __SSE2__
-    __m128 sse;
-#endif
-  };
+  dt_aligned_pixel_t v;
 } _aligned_pixel;
 #ifdef _OPENMP
 static inline _aligned_pixel add_float4(_aligned_pixel acc, _aligned_pixel newval)
@@ -419,20 +245,6 @@ static inline _aligned_pixel add_float4(_aligned_pixel acc, _aligned_pixel newva
     }                                                                                                        \
   } while(0)
 
-#if defined(__SSE__)
-#undef SUM_PIXEL_CONTRIBUTION_SSE
-#define SUM_PIXEL_CONTRIBUTION_SSE(ii, jj)	                                                             \
-  do                                                                                                         \
-  {                                                                                                          \
-    const float f = filter[(ii)] * filter[(jj)];	                                                     \
-    const float wp = dn_weight_sse(px, px2, inv_sigma2);                                                     \
-    const __m128 w = _mm_set1_ps(f * wp);                                                                    \
-    const __m128 pd = *px2 * w;                                                                              \
-    sum = sum + pd;                                                                                          \
-    wgt = wgt + w;                                                                                           \
-  } while(0)
-#endif
-
 #undef SUM_PIXEL_EPILOGUE
 #define SUM_PIXEL_EPILOGUE                                                                                   \
   for_each_channel(c)      										     \
@@ -446,19 +258,6 @@ static inline _aligned_pixel add_float4(_aligned_pixel acc, _aligned_pixel newva
   px += 4;                                                                                                   \
   pdetail += 4;                                                                                              \
   pcoarse += 4;
-
-#if defined(__SSE__)
-#undef SUM_PIXEL_EPILOGUE_SSE
-#define SUM_PIXEL_EPILOGUE_SSE                                                                               \
-  sum = sum / wgt;		                                                                             \
-  _mm_stream_ps(pcoarse, sum);                                                                               \
-  sum = *px - sum;											     \
-  _mm_stream_ps(pdetail, sum);                                                                               \
-  sum_sq.sse = sum_sq.sse + sum*sum;				                                             \
-  px++;                                                                                                      \
-  pdetail += 4;                                                                                              \
-  pcoarse += 4;
-#endif
 
 void eaw_dn_decompose(float *const restrict out, const float *const restrict in, float *const restrict detail,
                       dt_aligned_pixel_t sum_squared, const int scale, const float inv_sigma2,
@@ -555,100 +354,9 @@ void eaw_dn_decompose(float *const restrict out, const float *const restrict in,
 #undef SUM_PIXEL_PROLOGUE
 #undef SUM_PIXEL_EPILOGUE
 
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
+// vim: shiftwidth=2 expandtab tabstop=2 cindent
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
 
-#if defined(__SSE2__)
-void eaw_dn_decompose_sse(float *const restrict out, const float *const restrict in, float *const restrict detail,
-                          dt_aligned_pixel_t sum_squared, const int scale, const float inv_sigma2,
-                                 const int32_t width, const int32_t height)
-{
-  const int mult = 1u << scale;
-  static const float filter[5] = { 1.0f / 16.0f, 4.0f / 16.0f, 6.0f / 16.0f, 4.0f / 16.0f, 1.0f / 16.0f };
-  const int boundary = 2 * mult;
-
-  _aligned_pixel sum_sq = { .v = { 0.0f } };
-
-#if !(defined(__apple_build_version__) && __apple_build_version__ < 11030000) //makes Xcode 11.3.1 compiler crash
-#ifdef _OPENMP
-#pragma omp parallel for default(none) \
-  dt_omp_firstprivate(detail, filter, height, in, inv_sigma2, mult, boundary, out, width) \
-  reduction(vsum: sum_sq) \
-  schedule(static)
-#endif
-#endif
-  for(int rowid = 0; rowid < height; rowid++)
-  {
-    const size_t j = dwt_interleave_rows(rowid, height, mult);
-    const __m128 *px = ((__m128 *)in) + (size_t)j * width;
-    const __m128 *px2;
-    float *pdetail = detail + (size_t)4 * j * width;
-    float *pcoarse = out + (size_t)4 * j * width;
-
-    // for the first and last 'boundary' rows, we have to use the macros with tests for the entire row;
-    //   for the central bulk, we only need to use those slower versions on the leftmost and rightmost pixels
-    const int lbound = (j < boundary || j >= height - boundary) ? width-boundary : boundary;
-
-    /* The first "2*mult" pixels need a boundary check because we might try to access past the left edge,
-     * which requires nearest pixel interpolation */
-    int i;
-    for(i = 0; i < lbound; i++)
-    {
-      SUM_PIXEL_PROLOGUE_SSE;
-      for(int jj = 0; jj < 5; jj++)
-      {
-        const int y = j + mult * (jj-2);
-        const int clamp_y = CLAMP(y,0,height-1);
-        for(int ii = 0; ii < 5; ii++)
-        {
-          int x = i + mult * ((ii)-2);
-          if(x < 0) x = 0;			// we might be looking beyond the left edge
-          px2 = ((__m128 *)in) + x + (size_t)clamp_y * width;
-          SUM_PIXEL_CONTRIBUTION_SSE(ii, jj);
-        }
-      }
-      SUM_PIXEL_EPILOGUE_SSE;
-    }
-
-    /* For pixels [2*mult, width-2*mult], we don't need to do any boundary checks */
-    for( ; i < width - boundary; i++)
-    {
-      SUM_PIXEL_PROLOGUE_SSE;
-      px2 = ((__m128 *)in) + i - 2 * mult + (size_t)(j - 2 * mult) * width;
-      for(int jj = 0; jj < 5; jj++)
-      {
-        for(int ii = 0; ii < 5; ii++)
-        {
-          SUM_PIXEL_CONTRIBUTION_SSE(ii, jj);
-          px2 += mult;
-        }
-        px2 += (width - 5) * mult;
-      }
-      SUM_PIXEL_EPILOGUE_SSE;
-    }
-
-    /* Last 2*mult pixels in the row require the boundary check again */
-    for( ; i < width; i++)
-    {
-      SUM_PIXEL_PROLOGUE_SSE;
-      for(int jj = 0; jj < 5; jj++)
-      {
-        const int y = j + mult * (jj-2);
-        const int clamp_y = CLAMP(y,0,height-1);
-        for(int ii = 0; ii < 5; ii++)
-        {
-          int x = i + mult * ((ii)-2);
-          if(x >= width) x = width-1;		// we might be looking beyond the right edge
-          px2 = ((__m128 *)in) + x + (size_t)clamp_y * width;
-          SUM_PIXEL_CONTRIBUTION_SSE(ii, jj);
-        }
-      }
-      SUM_PIXEL_EPILOGUE_SSE;
-    }
-  }
-  _mm_store_ps(sum_squared, sum_sq.sse);
-  _mm_sfence();
-}
-
-#undef SUM_PIXEL_CONTRIBUTION_SSE
-#undef SUM_PIXEL_PROLOGUE_SSE
-#undef SUM_PIXEL_EPILOGUE_SSE
-#endif

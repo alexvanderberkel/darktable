@@ -42,7 +42,8 @@ const dt_collection_t *dt_selection_get_collection(struct dt_selection_t *select
 static void _selection_raise_signal()
 {
   // discard cached images_to_act_on list
-  darktable.view_manager->act_on.ok = FALSE;
+  dt_act_on_reset_cache(TRUE);
+  dt_act_on_reset_cache(FALSE);
 
   DT_DEBUG_CONTROL_SIGNAL_RAISE(darktable.signals, DT_SIGNAL_SELECTION_CHANGED);
 }
@@ -66,15 +67,17 @@ static void _selection_select(dt_selection_t *selection, uint32_t imgid)
       if(!darktable.gui || !darktable.gui->grouping || darktable.gui->expanded_group_id == img_group_id
          || !selection->collection)
       {
-        query = g_strdup_printf("INSERT OR IGNORE INTO main.selected_images VALUES (%d)", imgid);
+        query = g_strdup_printf("INSERT OR IGNORE INTO main.selected_images VALUES (%u)", imgid);
       }
       else
       {
+        // clang-format off
         query = g_strdup_printf("INSERT OR IGNORE INTO main.selected_images"
                                 "  SELECT id"
                                 "  FROM main.images "
                                 "  WHERE group_id = %d AND id IN (%s)",
                                 img_group_id, dt_collection_get_query_no_group(selection->collection));
+        // clang-format on
       }
 
       DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), query, NULL, NULL, NULL);
@@ -196,13 +199,15 @@ void dt_selection_deselect(dt_selection_t *selection, uint32_t imgid)
       gchar *query = NULL;
       if(!darktable.gui || !darktable.gui->grouping || darktable.gui->expanded_group_id == img_group_id)
       {
-        query = g_strdup_printf("DELETE FROM main.selected_images WHERE imgid = %d", imgid);
+        query = g_strdup_printf("DELETE FROM main.selected_images WHERE imgid = %u", imgid);
       }
       else
       {
+        // clang-format off
         query = g_strdup_printf("DELETE FROM main.selected_images WHERE imgid IN "
                                 "(SELECT id FROM main.images WHERE group_id = %d)",
                                 img_group_id);
+        // clang-format on
       }
 
       DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), query, NULL, NULL, NULL);
@@ -278,6 +283,9 @@ void dt_selection_select_range(dt_selection_t *selection, uint32_t imgid)
 {
   if(!selection->collection) return;
 
+  // selecting a range requires at least one image to be selected already
+  if(!dt_collection_get_selected_count(darktable.collection)) return;
+
   /* get start and end rows for range selection */
   sqlite3_stmt *stmt;
   int rc = 0;
@@ -307,6 +315,7 @@ void dt_selection_select_range(dt_selection_t *selection, uint32_t imgid)
   {
     sr = 0;
     srid = -1;
+    // clang-format off
     DT_DEBUG_SQLITE3_PREPARE_V2(
         dt_database_get(darktable.db),
         "SELECT m.rowid, m.imgid FROM memory.collected_images AS m, main.selected_images AS s"
@@ -314,6 +323,7 @@ void dt_selection_select_range(dt_selection_t *selection, uint32_t imgid)
         " ORDER BY m.rowid DESC"
         " LIMIT 1",
         -1, &stmt, NULL);
+    // clang-format on
     if(sqlite3_step(stmt) == SQLITE_ROW)
     {
       sr = sqlite3_column_int(stmt, 0);
@@ -360,11 +370,13 @@ void dt_selection_select_filmroll(dt_selection_t *selection)
                         "INSERT INTO memory.tmp_selection SELECT imgid FROM main.selected_images", NULL, NULL,
                         NULL);
   DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), "DELETE FROM main.selected_images", NULL, NULL, NULL);
+  // clang-format off
   DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db),
                         "INSERT OR IGNORE INTO main.selected_images SELECT id FROM main.images WHERE film_id IN "
                         "(SELECT film_id FROM main.images AS a JOIN memory.tmp_selection AS "
                         "b ON a.id = b.imgid)",
                         NULL, NULL, NULL);
+  // clang-format on
   DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), "DELETE FROM memory.tmp_selection", NULL, NULL, NULL);
 
   dt_collection_update(selection->collection);
@@ -381,24 +393,20 @@ void dt_selection_select_unaltered(dt_selection_t *selection)
 {
   if(!selection->collection) return;
 
-  /* set unaltered collection filter and update query */
-  const uint32_t old_filter_flags = dt_collection_get_filter_flags(selection->collection);
-  dt_collection_set_filter_flags(selection->collection, (dt_collection_get_filter_flags(selection->collection)
-                                                         | COLLECTION_FILTER_UNALTERED));
-  dt_collection_update(selection->collection);
-
-  char *fullq = g_strdup_printf("INSERT OR IGNORE INTO main.selected_images %s",
-                                dt_collection_get_query(selection->collection));
-
   /* clean current selection and select unaltered images */
-  DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), "DELETE FROM main.selected_images", NULL, NULL, NULL);
-  DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db), fullq, NULL, NULL, NULL);
+  DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db),
+                        "DELETE FROM main.selected_images", NULL, NULL, NULL);
 
-  /* restore collection filter and update query */
-  dt_collection_set_filter_flags(selection->collection, old_filter_flags);
-  dt_collection_update(selection->collection);
-
-  g_free(fullq);
+  DT_DEBUG_SQLITE3_EXEC
+    (dt_database_get(darktable.db),
+     "INSERT OR IGNORE"
+     " INTO main.selected_images"
+     " SELECT h.imgid"
+     "  FROM memory.collected_images as ci, main.history_hash as h"
+     "  WHERE ci.imgid = h.imgid"
+     "    AND (h.current_hash = h.auto_hash"
+     "         OR h.current_hash IS NULL)",
+     NULL, NULL, NULL);
 
   selection->last_single_id = -1;
   _selection_raise_signal();
@@ -447,10 +455,12 @@ gchar *dt_selection_get_list_query(struct dt_selection_t *selection, const gbool
   if(only_visible)
   {
     // we don't want to get image hidden because of grouping
+    // clang-format off
     query = g_strdup_printf("SELECT m.imgid"
                             " FROM memory.collected_images as m"
                             " WHERE m.imgid IN (SELECT s.imgid FROM main.selected_images as s)%s",
                             ordering ? " ORDER BY m.rowid DESC" : "");
+    // clang-format on
   }
   else
   {
@@ -458,10 +468,12 @@ gchar *dt_selection_get_list_query(struct dt_selection_t *selection, const gbool
     // selection already contains them, but not in right order
     if(ordering)
     {
+      // clang-format off
       query = g_strdup_printf("SELECT DISTINCT ng.id"
                               " FROM (%s) AS ng"
                               " WHERE ng.id IN (SELECT s.imgid FROM main.selected_images as s)",
                               dt_collection_get_query_no_group(dt_selection_get_collection(selection)));
+      // clang-format on
     }
     else
     {
@@ -490,6 +502,8 @@ GList *dt_selection_get_list(struct dt_selection_t *selection, const gboolean on
   return l;
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

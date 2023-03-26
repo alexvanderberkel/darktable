@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2010-2021 darktable developers.
+    Copyright (C) 2010-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include "common/file_location.h"
 #include "common/grealpath.h"
 #include "common/utility.h"
+#include "control/conf.h"
 #include "gui/gtk.h"
 
 /* getpwnam_r availability check */
@@ -98,12 +99,12 @@ guint dt_util_str_occurence(const gchar *haystack, const gchar *needle)
 
 gchar *dt_util_str_replace(const gchar *string, const gchar *pattern, const gchar *substitute)
 {
-  const gint occurences = dt_util_str_occurence(string, pattern);
+  const gint occurrences = dt_util_str_occurence(string, pattern);
   gchar *nstring = NULL;
 
-  if(occurences)
+  if(occurrences)
   {
-    nstring = g_malloc_n(strlen(string) + (occurences * strlen(substitute)) + 1, sizeof(gchar));
+    nstring = g_malloc_n(strlen(string) + (occurrences * strlen(substitute)) + 1, sizeof(gchar));
     const gchar *pend = string + strlen(string);
     const gchar *s = string, *p = string;
     gchar *np = nstring;
@@ -308,7 +309,15 @@ gboolean dt_util_test_writable_dir(const char *path)
   if(path == NULL) return FALSE;
 #ifdef _WIN32
   struct _stati64 stats;
-  if(_stati64(path, &stats)) return FALSE;
+
+  wchar_t *wpath = g_utf8_to_utf16(path, -1, NULL, NULL, NULL);
+  const int result = _wstati64(wpath, &stats);
+  g_free(wpath);
+
+  if(result)
+  { // error while testing path:
+    return FALSE;
+  }
 #else
   struct stat stats;
   if(stat(path, &stats)) return FALSE;
@@ -438,7 +447,7 @@ static cairo_surface_t *_util_get_svg_img(gchar *logo, const float size)
                                                        final_height, stride);
     if(cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS)
     {
-      fprintf(stderr, "warning: can't load darktable logo from SVG file `%s'\n", dtlogo);
+      dt_print(DT_DEBUG_ALWAYS, "warning: can't load darktable logo from SVG file `%s'\n", dtlogo);
       cairo_surface_destroy(surface);
       free(image_buffer);
       image_buffer = NULL;
@@ -448,7 +457,7 @@ static cairo_surface_t *_util_get_svg_img(gchar *logo, const float size)
     {
       cairo_t *cr = cairo_create(surface);
       cairo_scale(cr, factor, factor);
-      dt_render_svg(svg, cr, final_width, final_height, 0, 0);
+      dt_render_svg(svg, cr, dimension.width, dimension.height, 0, 0);
       cairo_destroy(cr);
       cairo_surface_flush(surface);
     }
@@ -456,7 +465,8 @@ static cairo_surface_t *_util_get_svg_img(gchar *logo, const float size)
   }
   else
   {
-    fprintf(stderr, "warning: can't load darktable logo from SVG file `%s'\n%s\n", dtlogo, error->message);
+    dt_print(DT_DEBUG_ALWAYS,
+             "warning: can't load darktable logo from SVG file `%s'\n%s\n", dtlogo, error->message);
     g_error_free(error);
   }
 
@@ -777,10 +787,10 @@ GList *dt_util_str_to_glist(const gchar *separator, const gchar *text)
   gchar *entry = g_strdup(text);
   gchar *prev = entry;
   int len = strlen(prev);
-  while (len)
+  while(len)
   {
     gchar *next = g_strstr_len(prev, -1, separator);
-    if (next)
+    if(next)
     {
       const gchar c = next[0];
       next[0] = '\0';
@@ -834,7 +844,7 @@ char *dt_util_format_exposure(const float exposuretime)
 
 char *dt_read_file(const char *const filename, size_t *filesize)
 {
-  if (filesize) *filesize = 0;
+  if(filesize) *filesize = 0;
   FILE *fd = g_fopen(filename, "rb");
   if(!fd) return NULL;
 
@@ -847,9 +857,9 @@ char *dt_read_file(const char *const filename, size_t *filesize)
 
   const size_t count = fread(content, sizeof(char), end, fd);
   fclose(fd);
-  if (count == end)
+  if(count == end)
   {
-    if (filesize) *filesize = end;
+    if(filesize) *filesize = end;
     return content;
   }
   free(content);
@@ -896,9 +906,26 @@ RsvgDimensionData dt_get_svg_dimension(RsvgHandle *svg)
   #if LIBRSVG_CHECK_VERSION(2,52,0)
     double width;
     double height;
-    rsvg_handle_get_intrinsic_size_in_pixels(svg, &width, &height);
-    dimension.width = width;
-    dimension.height = height;
+    if(rsvg_handle_get_intrinsic_size_in_pixels(svg, &width, &height)) //only works if SVG document has size specified
+    {
+      dimension.width = lround(width);
+      dimension.height = lround(height);
+    }
+    else
+    {
+#define VIEWPORT_SIZE 32767 //use maximum cairo surface size to have enough precision when size is converted to int
+      const RsvgRectangle viewport = {
+        .x = 0,
+        .y = 0,
+        .width = VIEWPORT_SIZE,
+        .height = VIEWPORT_SIZE,
+      };
+#undef VIEWPORT_SIZE
+      RsvgRectangle rectangle;
+      rsvg_handle_get_geometry_for_layer(svg, NULL, &viewport, NULL, &rectangle, NULL);
+      dimension.width = lround(rectangle.width);
+      dimension.height = lround(rectangle.height);
+    }
   #else
     rsvg_handle_get_dimensions(svg, &dimension);
   #endif
@@ -969,6 +996,42 @@ gchar *dt_str_replace(const char *string, const char *search, const char *replac
   return res;
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+gboolean dt_str_commasubstring(const char *list, const char *search)
+{
+  if(search == NULL)
+    return FALSE;
+
+  gchar *nlist = g_strdup(list);
+  char delimiter[] = ",";
+
+  char *ptr =strtok(nlist, delimiter);
+  while(ptr != NULL)
+  {
+    if(g_strcmp0(search, ptr) == 0)
+    {
+      g_free(nlist);
+      return TRUE;
+    }
+    ptr = strtok(NULL, delimiter);
+  }
+
+  g_free(nlist);
+  return FALSE;
+}
+
+gboolean dt_is_scene_referred(void)
+{
+  return dt_conf_is_equal("plugins/darkroom/workflow", "scene-referred (filmic)")
+    || dt_conf_is_equal("plugins/darkroom/workflow", "scene-referred (sigmoid)");
+}
+
+gboolean dt_is_display_referred(void)
+{
+  return dt_conf_is_equal("plugins/darkroom/workflow", "display-referred (legacy)");
+}
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

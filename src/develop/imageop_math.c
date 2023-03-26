@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2016-2021 darktable developers.
+    Copyright (C) 2016-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -21,9 +21,9 @@
 #include <glib.h> // for MIN, MAX, CLAMP, inline
 #include <math.h> // for round, floorf, fmaxf
 #include "common/darktable.h"        // for darktable, darktable_t, dt_code...
-#include "common/imageio.h"          // for FILTERS_ARE_4BAYER
 #include "common/interpolation.h"    // for dt_interpolation_new, dt_interp...
 #include "develop/imageop.h"         // for dt_iop_roi_t
+#include "imageio/imageio_common.h"          // for FILTERS_ARE_4BAYER
 
 void dt_iop_flip_and_zoom_8(const uint8_t *in, int32_t iw, int32_t ih, uint8_t *out, int32_t ow, int32_t oh,
                             const dt_image_orientation_t orientation, uint32_t *width, uint32_t *height)
@@ -232,7 +232,7 @@ void dt_iop_clip_and_zoom_mosaic_half_size(uint16_t *const out, const uint16_t *
         {
           col += in[clut[c][1] + xx + in_stride * yy];
           num++;
-          if (clut[c][0] == 2)
+          if(clut[c][0] == 2)
           { // G in RGGB CFA
             col += in[clut[c][2] + xx + in_stride * yy];
             num++;
@@ -1004,6 +1004,9 @@ void dt_iop_estimate_cubic(const float x[4], const float y[4], float a[4])
   mat4mulv(a, X_inv, y);
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

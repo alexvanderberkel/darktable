@@ -1,6 +1,6 @@
 /* --------------------------------------------------------------------------
     This file is part of darktable,
-    Copyright (C) 2012-2021 darktable developers.
+    Copyright (C) 2012-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,6 +25,10 @@
 #include <xmmintrin.h>
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
 /** Available interpolations */
 enum dt_interpolation_type
 {
@@ -41,23 +45,19 @@ enum dt_interpolation_type
 };
 
 /** Interpolation function */
-typedef float (*dt_interpolation_func)(float width, float t);
-
-#if defined(__SSE2__)
-/** Interpolation function (SSE) */
-typedef __m128 (*dt_interpolation_sse_func)(__m128 width, __m128 t);
-#endif
+typedef float (*dt_interpolation_func)(float *taps,
+                                       size_t num_taps,
+                                       float width,
+                                       float first_tap,
+                                       float interval);
 
 /** Interpolation structure */
 struct dt_interpolation
 {
   enum dt_interpolation_type id;     /**< Id such as defined by the dt_interpolation_type */
   const char *name;                  /**< internal name  */
-  int width;                         /**< Half width of its kernel support */
-  dt_interpolation_func func;        /**< Kernel function */
-#if defined(__SSE2__)
-  dt_interpolation_sse_func funcsse; /**< Kernel function (four params a time) */
-#endif
+  size_t width;                      /**< Half width of its kernel support */
+  dt_interpolation_func maketaps;    /**< Kernel function */
 };
 
 /** Compute a single interpolated sample.
@@ -126,9 +126,9 @@ const struct dt_interpolation *dt_interpolation_new(enum dt_interpolation_type t
  * <li>The resampling is isotropic (same for both x and y directions),
  * represented by roi_out->scale</li>
  * <li>It generates roi_out->width samples horizontally whose positions span
- * from roi_out->x to roi_out->x + roi_out->width</li>
+ * from roi_out->x to roi_out->x + roi_out->width - 1</li>
  * <li>It generates roi_out->height samples vertically whose positions span
- * from roi_out->y to roi_out->y + roi_out->height</li>
+ * from roi_out->y to roi_out->y + roi_out->height - 1</li>
  * </ul>
  *
  * @param itor [in] Interpolator to use
@@ -168,9 +168,9 @@ void dt_interpolation_free_cl_global(dt_interpolation_cl_global_t *g);
  * <li>The resampling is isotropic (same for both x and y directions),
  * represented by roi_out->scale</li>
  * <li>It generates roi_out->width samples horizontally whose positions span
- * from roi_out->x to roi_out->x + roi_out->width</li>
+ * from roi_out->x to roi_out->x + roi_out->width - 1</li>
  * <li>It generates roi_out->height samples vertically whose positions span
- * from roi_out->y to roi_out->y + roi_out->height</li>
+ * from roi_out->y to roi_out->y + roi_out->height - 1</li>
  * </ul>
  *
  * @param itor [in] Interpolator to use
@@ -202,6 +202,13 @@ void dt_interpolation_resample_roi_1c(const struct dt_interpolation *itor, float
                                       const float *const in, const dt_iop_roi_t *const roi_in,
                                       const int32_t in_stride);
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+#ifdef __cplusplus
+} // extern "C"
+#endif /* __cplusplus */
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

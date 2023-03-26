@@ -1,6 +1,6 @@
 /*
    This file is part of darktable,
-   Copyright (C) 2013-2021 darktable developers.
+   Copyright (C) 2013-2023 darktable developers.
 
    darktable is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU General Public License
    along with darktable.  If not, see <http://www.gnu.org/licenses/>.
- */
+*/
 
 #include "lua/image.h"
 #include "common/colorlabels.h"
@@ -28,6 +28,7 @@
 #include "common/collection.h"
 #include "common/metadata.h"
 #include "common/ratings.h"
+#include "common/datetime.h"
 #include "views/view.h"
 #include "lua/database.h"
 #include "lua/film.h"
@@ -68,7 +69,8 @@ void dt_lua_image_push(lua_State *L, int imgid)
 {
   // check that id is valid
   sqlite3_stmt *stmt;
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "SELECT id FROM main.images WHERE id = ?1", -1, &stmt,
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "SELECT id FROM main.images WHERE id = ?1", -1, &stmt,
                               NULL);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
   if(sqlite3_step(stmt) != SQLITE_ROW)
@@ -106,7 +108,7 @@ static int generate_cache(lua_State *L)
   const gboolean create_dirs = lua_toboolean(L, 2);
   const int min = luaL_checkinteger(L, 3);
   const int max = luaL_checkinteger(L, 4);
-  
+
   if(create_dirs)
   {
     for(dt_mipmap_size_t k = min; k <= max; k++)
@@ -118,7 +120,7 @@ static int generate_cache(lua_State *L)
       {
         if(g_mkdir_with_parents(dirname, 0750))
         {
-          fprintf(stderr, _("could not create directory '%s'!\n"), dirname);
+          dt_print(DT_DEBUG_ALWAYS, "[lua] could not create directory '%s'!\n", dirname);
           return 1;
         }
       }
@@ -128,7 +130,8 @@ static int generate_cache(lua_State *L)
   for(int k = max; k >= min && k >= 0; k--)
   {
     char filename[PATH_MAX] = { 0 };
-    snprintf(filename, sizeof(filename), "%s.d/%d/%d.jpg", darktable.mipmap_cache->cachedir, k, imgid);
+    snprintf(filename, sizeof(filename),
+             "%s.d/%d/%d.jpg", darktable.mipmap_cache->cachedir, k, imgid);
 
     // if a valid thumbnail file is already on disc - do nothing
     if(dt_util_test_image_file(filename)) continue;
@@ -263,7 +266,8 @@ static int rating_member(lua_State *L)
     my_image->flags &= ~DT_VIEW_RATINGS_MASK;
     my_image->flags |= my_score;
     releasewriteimage(L, my_image);
-    dt_collection_update_query(darktable.collection, DT_COLLECTION_CHANGE_RELOAD, DT_COLLECTION_PROP_RATING,
+    dt_collection_update_query(darktable.collection,
+                               DT_COLLECTION_CHANGE_RELOAD, DT_COLLECTION_PROP_RATING,
                                g_list_prepend(NULL, GINT_TO_POINTER(my_image->id)));
     return 0;
   }
@@ -311,6 +315,27 @@ static int metadata_member(lua_State *L)
   {
     dt_image_t *my_image = checkwriteimage(L, 1);
     dt_metadata_set(my_image->id, key, luaL_checkstring(L, 3), FALSE);
+    dt_image_synch_xmp(my_image->id);
+    releasewriteimage(L, my_image);
+    return 0;
+  }
+}
+
+static int exif_datetime_taken_member(lua_State *L)
+{
+  if(lua_gettop(L) != 3)
+  {
+    const dt_image_t *my_image = checkreadimage(L, 1);
+    char sdt[DT_DATETIME_EXIF_LENGTH] = {0};
+    dt_datetime_img_to_exif(sdt, sizeof(sdt), my_image);
+    lua_pushstring(L, sdt);
+    releasereadimage(L, my_image);
+    return 1;
+  }
+  else
+  {
+    dt_image_t *my_image = checkwriteimage(L, 1);
+    dt_datetime_exif_to_img(my_image, luaL_checkstring(L, 3));
     dt_image_synch_xmp(my_image->id);
     releasewriteimage(L, my_image);
     return 0;
@@ -365,7 +390,8 @@ static int colorlabel_member(lua_State *L)
     {
       dt_colorlabels_remove_label(imgid, colorlabel_index);
     }
-    dt_collection_update_query(darktable.collection, DT_COLLECTION_CHANGE_RELOAD, DT_COLLECTION_PROP_COLORLABEL,
+    dt_collection_update_query(darktable.collection,
+                               DT_COLLECTION_CHANGE_RELOAD, DT_COLLECTION_PROP_COLORLABEL,
                                g_list_prepend(NULL, GINT_TO_POINTER(imgid)));
     return 0;
   }
@@ -429,7 +455,8 @@ int get_group(lua_State *L)
   int group_id = cimg->group_id;
   dt_image_cache_read_release(darktable.image_cache, cimg);
   sqlite3_stmt *stmt;
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "SELECT id FROM main.images WHERE group_id = ?1", -1,
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "SELECT id FROM main.images WHERE group_id = ?1", -1,
                               &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, group_id);
   lua_newtable(L);
@@ -484,10 +511,11 @@ int dt_lua_init_image(lua_State *L)
   luaA_struct_member(L, dt_image_t, exif_maker, char_64);
   luaA_struct_member(L, dt_image_t, exif_model, char_64);
   luaA_struct_member(L, dt_image_t, exif_lens, char_128);
-  luaA_struct_member(L, dt_image_t, exif_datetime_taken, char_20);
   luaA_struct_member(L, dt_image_t, filename, const char_filename_length);
   luaA_struct_member(L, dt_image_t, width, const int32_t);
   luaA_struct_member(L, dt_image_t, height, const int32_t);
+  luaA_struct_member(L, dt_image_t, aspect_ratio, const float);
+
   luaA_struct_member_name(L, dt_image_t, geoloc.longitude, protected_double, longitude); // set to NAN if value is not set
   luaA_struct_member_name(L, dt_image_t, geoloc.latitude, protected_double, latitude); // set to NAN if value is not set
   luaA_struct_member_name(L, dt_image_t, geoloc.elevation, protected_double, elevation); // set to NAN if value is not set
@@ -499,7 +527,8 @@ int dt_lua_init_image(lua_State *L)
   {
     lua_pushcfunction(L, image_luaautoc_member);
     luaA_Type member_type = luaA_struct_typeof_member_name(L, dt_image_t, member_name);
-    if(luaA_conversion_to_registered_type(L, member_type) || luaA_struct_registered_type(L, member_type)
+    if(luaA_conversion_to_registered_type(L, member_type)
+       || luaA_struct_registered_type(L, member_type)
        || luaA_enum_registered_type(L, member_type))
     {
       dt_lua_type_register(L, dt_lua_image_t, member_name);
@@ -546,6 +575,8 @@ int dt_lua_init_image(lua_State *L)
     dt_lua_type_register(L, dt_lua_image_t, *name);
     name++;
   }
+  lua_pushcfunction(L, exif_datetime_taken_member);
+  dt_lua_type_register(L, dt_lua_image_t, "exif_datetime_taken");
   // metadata
   for(unsigned int i = 0; i < DT_METADATA_NUMBER; i++)
   {
@@ -607,6 +638,8 @@ int dt_lua_init_image(lua_State *L)
   return 0;
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

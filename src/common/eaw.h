@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2017-2020 darktable developers.
+    Copyright (C) 2017-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -35,12 +35,6 @@ void eaw_synthesize(float *const restrict out, const float *const restrict in, c
                     const float *const restrict thrsf, const float *const restrict boostf,
                     const int32_t width, const int32_t height);
 
-void eaw_decompose_sse2(float *const restrict out, const float *const restrict in, float *const restrict detail,
-                        const int scale, const float sharpen, const int32_t width, const int32_t height);
-void eaw_synthesize_sse2(float *const restrict out, const float *const restrict in, const float *const restrict detail,
-                         const float *const restrict thrsf, const float *const restrict boostf,
-                         const int32_t width, const int32_t height);
-
 typedef void((*eaw_dn_decompose_t)(float *const restrict out, const float *const restrict in, float *const restrict detail,
                                    dt_aligned_pixel_t sum_squared, const int scale, const float inv_sigma2,
                                    const int32_t width, const int32_t height));
@@ -48,6 +42,10 @@ typedef void((*eaw_dn_decompose_t)(float *const restrict out, const float *const
 void eaw_dn_decompose(float *const restrict out, const float *const restrict in, float *const restrict detail,
                       dt_aligned_pixel_t sum_squared, const int scale, const float inv_sigma2,
                       const int32_t width, const int32_t height);
-void eaw_dn_decompose_sse(float *const restrict out, const float *const restrict in, float *const restrict detail,
-                          dt_aligned_pixel_t sum_squared, const int scale, const float inv_sigma2,
-                          const int32_t width, const int32_t height);
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
+// vim: shiftwidth=2 expandtab tabstop=2 cindent
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

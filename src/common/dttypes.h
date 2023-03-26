@@ -49,7 +49,7 @@ typedef float DT_ALIGNED_ARRAY dt_colormatrix_t[4][4];
 // A macro which gives us a configurable shorthand to produce the optimal performance when processing all of the
 // channels in a pixel.  Its first argument is the name of the variable to be used inside the 'for' loop it creates,
 // while the optional second argument is a set of OpenMP directives, typically specifying variable alignment.
-// If indexing off of the begining of any buffer allocated with dt's image or aligned allocation functions, the
+// If indexing off of the beginning of any buffer allocated with dt's image or aligned allocation functions, the
 // alignment to specify is 64; otherwise, use 16, as there may have been an odd number of pixels from the start.
 // Sample usage:
 //         for_each_channel(k,aligned(src,dest:16))
@@ -66,12 +66,18 @@ typedef float DT_ALIGNED_ARRAY dt_colormatrix_t[4][4];
 #define for_four_channels(_var, ...) \
   _DT_Pragma(omp simd __VA_ARGS__) \
   for (size_t _var = 0; _var < 4; _var++)
+#define for_three_channels(_var, ...) \
+  _DT_Pragma(omp simd __VA_ARGS__) \
+  for (size_t _var = 0; _var < 3; _var++)
 #else
 #define for_each_channel(_var, ...) \
   for (size_t _var = 0; _var < DT_PIXEL_SIMD_CHANNELS; _var++)
 #define for_four_channels(_var, ...) \
   for (size_t _var = 0; _var < 4; _var++)
+#define for_three_channels(_var, ...) \
+  for (size_t _var = 0; _var < 3; _var++)
 #endif
+
 
 // transpose a padded 3x3 matrix
 static inline void transpose_3xSSE(const dt_colormatrix_t input, dt_colormatrix_t output)
@@ -168,6 +174,9 @@ static inline void dt_colormatrix_mul(dt_colormatrix_t dst, const dt_colormatrix
   }
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

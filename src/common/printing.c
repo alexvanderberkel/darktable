@@ -53,11 +53,6 @@ void dt_printing_clear_boxes(dt_images_box *imgs)
   imgs->imgid_to_load = -1;
 }
 
-static inline float sqrf(float a)
-{
-  return a * a;
-}
-
 int32_t dt_printing_get_image_box(const dt_images_box *imgs, const int x, const int y)
 {
   int box = -1;
@@ -110,7 +105,7 @@ void _compute_rel_pos(const dt_images_box *imgs, const dt_image_pos *ref, dt_ima
 void dt_printing_setup_display(dt_images_box *imgs,
                                const float px, const float py, const float pwidth, const float pheight,
                                const float ax, const float ay, const float awidth, const float aheight,
-  gboolean borderless)
+                               gboolean borderless)
 {
   imgs->screen.page.x      = px;
   imgs->screen.page.y      = py;
@@ -121,6 +116,11 @@ void dt_printing_setup_display(dt_images_box *imgs,
   imgs->screen.print_area.y      = ay;
   imgs->screen.print_area.width  = awidth;
   imgs->screen.print_area.height = aheight;
+
+  dt_print(DT_DEBUG_PRINT, "[printing] screen/page  (%3.1f, %3.1f) -> (%3.1f, %3.1f)\n",
+           px, py, pwidth, pheight);
+  dt_print(DT_DEBUG_PRINT, "[printing] screen/parea (%3.1f, %3.1f) -> (%3.1f, %3.1f)\n",
+           ax, ay, awidth, aheight);
 
   imgs->screen.borderless = borderless;
 
@@ -327,6 +327,9 @@ void dt_printing_setup_image(dt_images_box *imgs, const int idx,
   }
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

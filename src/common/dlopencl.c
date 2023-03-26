@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2011-2020 darktable developers.
+    Copyright (C) 2011-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -41,7 +41,7 @@ static const char *ocllib[] = { "libOpenCL", "libOpenCL.so", "libOpenCL.so.1", N
 void dt_dlopencl_noop(void)
 {
   /* we should normally never get here */
-  fprintf(stderr, "dt_dlopencl internal error: unsupported function call\n");
+  dt_print(DT_DEBUG_OPENCL, "dt_dlopencl internal error: unsupported function call\n");
   raise(SIGABRT);
 }
 
@@ -64,9 +64,9 @@ dt_dlopencl_t *dt_dlopencl_init(const char *name)
     library = name;
     module = dt_gmodule_open(library);
     if(module == NULL)
-      dt_print(DT_DEBUG_OPENCL, "[opencl_init] could not find opencl runtime library '%s'\n", library);
+      dt_print(DT_DEBUG_OPENCL | DT_DEBUG_VERBOSE, "[dt_dlopencl_init] could not find opencl runtime library '%s'\n", library);
     else
-      dt_print(DT_DEBUG_OPENCL, "[opencl_init] found opencl runtime library '%s'\n", library);
+      dt_print(DT_DEBUG_OPENCL | DT_DEBUG_VERBOSE, "[dt_dlopencl_init] found opencl runtime library '%s'\n", library);
   }
   else
   {
@@ -76,9 +76,9 @@ dt_dlopencl_t *dt_dlopencl_init(const char *name)
       library = *iter;
       module = dt_gmodule_open(library);
       if(module == NULL)
-        dt_print(DT_DEBUG_OPENCL, "[opencl_init] could not find opencl runtime library '%s'\n", library);
+        dt_print(DT_DEBUG_OPENCL | DT_DEBUG_VERBOSE, "[dt_dlopencl_init] could not find opencl runtime library '%s'\n", library);
       else
-        dt_print(DT_DEBUG_OPENCL, "[opencl_init] found opencl runtime library '%s'\n", library);
+        dt_print(DT_DEBUG_OPENCL | DT_DEBUG_VERBOSE, "[dt_dlopencl_init] found opencl runtime library '%s'\n", library);
       iter++;
     }
   }
@@ -223,6 +223,9 @@ dt_dlopencl_t *dt_dlopencl_init(const char *name)
 
 #endif
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

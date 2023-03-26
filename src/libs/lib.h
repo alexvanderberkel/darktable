@@ -60,6 +60,8 @@ typedef struct dt_lib_t
       void (*update_samples)(struct dt_lib_module_t *self);
       void (*set_sample_box_area)(struct dt_lib_module_t *self, const dt_boundingbox_t size);
       void (*set_sample_point)(struct dt_lib_module_t *self, const float pos[2]);
+      void (*setup_sample)(struct dt_lib_module_t *self, const gboolean denoise,
+                           const gboolean pick_output);
     } colorpicker;
 
     /** Histogram processing hooks */
@@ -73,6 +75,11 @@ typedef struct dt_lib_t
       // FIXME: now that PR #5532 is merged, define this as dt_atomic_int and include "common/atomic.h" and use dt_atomic_set_int() and dt_atomic_get_int()
       gboolean is_linear;
     } histogram;
+
+    struct
+    {
+      struct dt_lib_module_t *module;
+    } navigation;
   } proxy;
 } dt_lib_t;
 
@@ -108,15 +115,12 @@ void dt_lib_cleanup(dt_lib_t *lib);
 
 /** creates a label widget for the expander, with callback to enable/disable this module. */
 GtkWidget *dt_lib_gui_get_expander(dt_lib_module_t *module);
-/** set a expand/collaps plugin expander */
+/** set an expand/collapse plugin expander */
 void dt_lib_gui_set_expanded(dt_lib_module_t *module, gboolean expanded);
 /** get the expanded state of a plugin */
 gboolean dt_lib_gui_get_expanded(dt_lib_module_t *module);
 
 extern const struct dt_action_def_t dt_action_def_lib;
-
-/** connects the reset and presets shortcuts to a lib */
-void dt_lib_connect_common_accels(dt_lib_module_t *module);
 
 /** return the plugin with the given name */
 dt_lib_module_t *dt_lib_get_module(const char *name);
@@ -164,11 +168,20 @@ void dt_lib_colorpicker_set_box_area(dt_lib_t *lib, const dt_boundingbox_t box);
 /** set the colorpicker point selection tool and position */
 void dt_lib_colorpicker_set_point(dt_lib_t *lib, const float pos[2]);
 
+/** setup colorpicker options */
+void dt_lib_colorpicker_setup(dt_lib_t *lib, const gboolean denoise, const gboolean pick_output);
+
 /** sorter callback to add a lib in the list of libs after init */
 gint dt_lib_sort_plugins(gconstpointer a, gconstpointer b);
 /** init presets for a newly created lib */
 void dt_lib_init_presets(dt_lib_module_t *module);
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+/** handle Enter key for dialog. Note it uses GTK_RESPONSE_ACCEPT code */
+gboolean dt_handle_dialog_enter(GtkWidget *widget, GdkEventKey *event, gpointer data);
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

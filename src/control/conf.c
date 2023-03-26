@@ -39,18 +39,6 @@ typedef struct dt_conf_dreggn_t
   const char *match;
 } dt_conf_dreggn_t;
 
-static void _free_confgen_value(void *value)
-{
-  dt_confgen_value_t *s = (dt_confgen_value_t *)value;
-  g_free(s->def);
-  g_free(s->min);
-  g_free(s->max);
-  g_free(s->enum_values);
-  g_free(s->shortdesc);
-  g_free(s->longdesc);
-  g_free(s);
-}
-
 /** return slot for this variable or newly allocated slot. */
 static inline char *dt_conf_get_var(const char *name)
 {
@@ -327,10 +315,18 @@ const char *dt_conf_get_string_const(const char *name)
   return dt_conf_get_var(name);
 }
 
+gboolean dt_conf_key_not_empty(const char *name)
+{
+  const char *val = dt_conf_get_string_const(name);
+  if(val == NULL)      return FALSE;
+  if(strlen(val) == 0) return FALSE;
+  return TRUE;
+}
+
 gboolean dt_conf_get_folder_to_file_chooser(const char *name, GtkFileChooser *chooser)
 {
   const gchar *folder = dt_conf_get_string_const(name);
-  if (folder)
+  if(folder)
   {
     gtk_file_chooser_set_current_folder(chooser, folder);
     return TRUE;
@@ -402,6 +398,7 @@ static char *_sanitize_confgen(const char *name, const char *value)
         result = g_strdup(dt_confgen_get(name, DT_DEFAULT));
       else
         result = g_strdup(value);
+
       g_free(v);
     }
     break;
@@ -415,8 +412,6 @@ static char *_sanitize_confgen(const char *name, const char *value)
 
 void dt_conf_init(dt_conf_t *cf, const char *filename, GSList *override_entries)
 {
-  cf->x_confgen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, _free_confgen_value);
-
   cf->table = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
   cf->override_entries = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
   dt_pthread_mutex_init(&darktable.conf->mutex, NULL);
@@ -429,7 +424,6 @@ void dt_conf_init(dt_conf_t *cf, const char *filename, GSList *override_entries)
   char line[LINE_SIZE + 1];
 
   FILE *f = NULL;
-  gboolean defaults = FALSE;
 
   // check for user config
   f = g_fopen(filename, "rb");
@@ -440,9 +434,10 @@ void dt_conf_init(dt_conf_t *cf, const char *filename, GSList *override_entries)
   {
     while(!feof(f))
     {
-      const int read = fscanf(f, "%" STR(LINE_SIZE) "[^\r\n]\r\n", line);
-      if(read > 0)
+      const char* ret = fgets(line, LINE_SIZE, f);
+      if(ret != NULL)
       {
+        g_strchomp(line);
         char *c = line;
         char *end = line + strlen(line);
         // check for '=' which is separator between the conf name and value
@@ -466,26 +461,18 @@ void dt_conf_init(dt_conf_t *cf, const char *filename, GSList *override_entries)
   }
   else
   {
-    // this is first run, remember we init
-    defaults = TRUE;
-
     // we initialize the conf table with default values
     GHashTableIter iter;
     gpointer key, value;
 
     g_hash_table_iter_init (&iter, darktable.conf->x_confgen);
-    while (g_hash_table_iter_next (&iter, &key, &value))
+    while(g_hash_table_iter_next (&iter, &key, &value))
     {
       const char *name = (const char *)key;
       const dt_confgen_value_t *entry = (dt_confgen_value_t *)value;
       g_hash_table_insert(darktable.conf->table, g_strdup(name), g_strdup(entry->def));
     }
   }
-
-  // for the very first time after a fresh install
-  // execute performance configuration no matter what
-  if(defaults)
-    dt_configure_performance();
 
   if(override_entries)
   {
@@ -499,35 +486,6 @@ void dt_conf_init(dt_conf_t *cf, const char *filename, GSList *override_entries)
 #undef LINE_SIZE
 
   return;
-}
-
-static void dt_conf_print(const gchar *key, const gchar *val, FILE *f)
-{
-  fprintf(f, "%s=%s\n", key, val);
-}
-
-void dt_conf_cleanup(dt_conf_t *cf)
-{
-  FILE *f = g_fopen(cf->filename, "wb");
-  if(f)
-  {
-    GList *keys = g_hash_table_get_keys(cf->table);
-    GList *sorted = g_list_sort(keys, (GCompareFunc)g_strcmp0);
-
-    for(GList *iter = sorted; iter; iter = g_list_next(iter))
-    {
-      const gchar *key = (const gchar *)iter->data;
-      const gchar *val = (const gchar *)g_hash_table_lookup(cf->table, key);
-      dt_conf_print(key, val, f);
-    }
-
-    g_list_free(sorted);
-    fclose(f);
-  }
-  g_hash_table_unref(cf->table);
-  g_hash_table_unref(cf->override_entries);
-  g_hash_table_unref(cf->x_confgen);
-  dt_pthread_mutex_destroy(&darktable.conf->mutex);
 }
 
 /** check if key exists, return 1 if lookup succeeded, 0 if failed..*/
@@ -659,7 +617,7 @@ int dt_confgen_get_int(const char *name, dt_confgen_value_kind_t kind)
   if(!dt_confgen_value_exists(name, kind))
   {
     //early bail
-    switch (kind)
+    switch(kind)
     {
     case DT_MIN:
       return INT_MIN;
@@ -677,7 +635,7 @@ int dt_confgen_get_int(const char *name, dt_confgen_value_kind_t kind)
   //if str is NULL or empty, dt_calculator_solve will return NAN
   const float value = dt_calculator_solve(1, str);
 
-  switch (kind)
+  switch(kind)
   {
   case DT_MIN:
     return isnan(value) ? INT_MIN : (value > 0 ? value + 0.5f : value - 0.5f);
@@ -697,7 +655,7 @@ int64_t dt_confgen_get_int64(const char *name, dt_confgen_value_kind_t kind)
   if(!dt_confgen_value_exists(name, kind))
   {
     //early bail
-    switch (kind)
+    switch(kind)
     {
     case DT_MIN:
       return INT64_MIN;
@@ -715,7 +673,7 @@ int64_t dt_confgen_get_int64(const char *name, dt_confgen_value_kind_t kind)
   //if str is NULL or empty, dt_calculator_solve will return NAN
   const float value = dt_calculator_solve(1, str);
 
-  switch (kind)
+  switch(kind)
   {
   case DT_MIN:
     return isnan(value) ? INT64_MIN : (value > 0 ? value + 0.5f : value - 0.5f);
@@ -741,7 +699,7 @@ float dt_confgen_get_float(const char *name, dt_confgen_value_kind_t kind)
   if(!dt_confgen_value_exists(name, kind))
   {
     //early bail
-    switch (kind)
+    switch(kind)
     {
     case DT_MIN:
       return -FLT_MAX;
@@ -760,7 +718,7 @@ float dt_confgen_get_float(const char *name, dt_confgen_value_kind_t kind)
   //if str is NULL or empty, dt_calculator_solve will return NAN
   const float value = dt_calculator_solve(1, str);
 
-  switch (kind)
+  switch(kind)
   {
   case DT_MIN:
     // to anyone askig FLT_MIN is superclose to 0, not furthest value from 0 possible in float
@@ -834,7 +792,41 @@ gchar* dt_conf_expand_default_dir(const char *dir)
   return normalized_path;
 }
 
+static void dt_conf_print(const gchar *key, const gchar *val, FILE *f)
+{
+  fprintf(f, "%s=%s\n", key, val);
+}
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+void dt_conf_save(dt_conf_t *cf)
+{
+  FILE *f = g_fopen(cf->filename, "wb");
+  if(f)
+  {
+    GList *keys = g_hash_table_get_keys(cf->table);
+    GList *sorted = g_list_sort(keys, (GCompareFunc)g_strcmp0);
+
+    for(GList *iter = sorted; iter; iter = g_list_next(iter))
+    {
+      const gchar *key = (const gchar *)iter->data;
+      const gchar *val = (const gchar *)g_hash_table_lookup(cf->table, key);
+      dt_conf_print(key, val, f);
+    }
+
+    g_list_free(sorted);
+    fclose(f);
+  }
+}
+void dt_conf_cleanup(dt_conf_t *cf)
+{
+  dt_conf_save(cf);
+  g_hash_table_unref(cf->table);
+  g_hash_table_unref(cf->override_entries);
+  g_hash_table_unref(cf->x_confgen);
+  dt_pthread_mutex_destroy(&darktable.conf->mutex);
+}
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

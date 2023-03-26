@@ -2,6 +2,11 @@
 
 #include "common/darktable.h"
 #include <gtk/gtk.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
 /** array of names and constant to ease label manipulation */
 typedef enum dt_colorlables_enum
 {
@@ -35,6 +40,13 @@ int dt_colorlabels_check_label(const int imgid, const int color);
 
 extern const struct dt_action_def_t dt_action_def_color_label;
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+#ifdef __cplusplus
+} // extern "C"
+#endif /* __cplusplus */
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

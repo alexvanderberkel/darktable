@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2010-2021 darktable developers.
+    Copyright (C) 2010-2022 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -24,7 +24,7 @@
 
 // this was removed from lcms2 in 2.4
 #ifndef TYPE_XYZA_FLT
-  #define TYPE_XYZA_FLT         (FLOAT_SH(1)|COLORSPACE_SH(PT_XYZ)|EXTRA_SH(1)|CHANNELS_SH(3)|BYTES_SH(4))
+  #define TYPE_XYZA_FLT (FLOAT_SH(1)|COLORSPACE_SH(PT_XYZ)|EXTRA_SH(1)|CHANNELS_SH(3)|BYTES_SH(4))
 #endif
 
 // max iccprofile file name length
@@ -252,8 +252,71 @@ void dt_colorspaces_get_profile_name(cmsHPROFILE p, const char *language, const 
 const char *dt_colorspaces_get_name(dt_colorspaces_color_profile_type_t type, const char *filename);
 
 /** common functions to change between colorspaces, used in iop modules */
-void rgb2hsl(const dt_aligned_pixel_t rgb, float *h, float *s, float *l);
-void hsl2rgb(dt_aligned_pixel_t rgb, float h, float s, float l);
+//void rgb2hsl(const dt_aligned_pixel_t rgb, float *h, float *s, float *l);
+//void hsl2rgb(dt_aligned_pixel_t rgb, float h, float s, float l);
+static inline void rgb2hsl(const dt_aligned_pixel_t rgb, float *h, float *s, float *l)
+{
+  const float r = rgb[0], g = rgb[1], b = rgb[2];
+  const float pmax = fmaxf(r, fmax(g, b));
+  const float pmin = fminf(r, fmin(g, b));
+  const float delta = (pmax - pmin);
+
+  float hv = 0, sv = 0, lv = (pmin + pmax) / 2.0;
+
+  if(delta != 0.0f)
+  {
+    sv = lv < 0.5 ? delta / fmaxf(pmax + pmin, 1.52587890625e-05f)
+                  : delta / fmaxf(2.0 - pmax - pmin, 1.52587890625e-05f);
+
+    if(pmax == r)
+      hv = (g - b) / delta;
+    else if(pmax == g)
+      hv = 2.0 + (b - r) / delta;
+    else if(pmax == b)
+      hv = 4.0 + (r - g) / delta;
+    hv /= 6.0;
+    if(hv < 0.0)
+      hv += 1.0;
+    else if(hv > 1.0)
+      hv -= 1.0;
+  }
+  *h = hv;
+  *s = sv;
+  *l = lv;
+}
+
+// for efficiency, 'hue' must be pre-scaled to be in 0..6
+static inline float hue2rgb(float m1, float m2, float hue)
+{
+  // compute the value for one of the RGB channels from the hue angle.
+  // If 1 <= angle < 3, return m2; if 4 <= angle <= 6, return m1; otherwise, linearly interpolate between m1 and m2.
+  if(hue < 1.0f)
+    return (m1 + (m2 - m1) * hue);
+  else if(hue < 3.0f)
+    return m2;
+  else
+    return hue < 4.0f ? (m1 + (m2 - m1) * (4.0f - hue)) : m1;
+}
+
+static inline void hsl2rgb(dt_aligned_pixel_t rgb, float h, float s, float l)
+{
+  float m1, m2;
+  if(s == 0)
+  {
+    rgb[0] = rgb[1] = rgb[2] = l;
+    rgb[3] = 0.0f;
+    return;
+  }
+  m2 = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
+  m1 = (2.0 * l - m2);
+  h *= 6.0f;  // pre-scale hue angle
+  rgb[0] = hue2rgb(m1, m2, h < 4.0f ? h + 2.0f : h - 4.0f);
+  rgb[1] = hue2rgb(m1, m2, h);
+  rgb[2] = hue2rgb(m1, m2, h > 2.0f ? h - 2.0f : h + 4.0f);
+  rgb[3] = 0.0f;
+}
+
+
 
 /** trigger updating the display profile from the system settings (x atom, colord, ...) */
 void dt_colorspaces_set_display_profile(const dt_colorspaces_color_profile_type_t profile_type);
@@ -279,10 +342,10 @@ void dt_colorspaces_update_display_transforms();
 void dt_colorspaces_update_display2_transforms();
 
 /** Calculate CAM->XYZ, XYZ->CAM matrices **/
-int dt_colorspaces_conversion_matrices_xyz(const char *name, float in_XYZ_to_CAM[9], double XYZ_to_CAM[4][3], double CAM_to_XYZ[3][4]);
+int dt_colorspaces_conversion_matrices_xyz(const float adobe_XYZ_to_CAM[4][3], float in_XYZ_to_CAM[9], double XYZ_to_CAM[4][3], double CAM_to_XYZ[3][4]);
 
 /** Calculate CAM->RGB, RGB->CAM matrices and default WB multipliers */
-int dt_colorspaces_conversion_matrices_rgb(const char *name, double RGB_to_CAM[4][3], double CAM_to_RGB[3][4], const float *embedded_matrix, double mul[4]);
+int dt_colorspaces_conversion_matrices_rgb(const float adobe_XYZ_to_CAM[4][3], double RGB_to_CAM[4][3], double CAM_to_RGB[3][4], const float *embedded_matrix, double mul[4]);
 
 /** Applies CYGM WB coeffs to an image that's already been converted to RGB by dt_colorspaces_cygm_to_rgb */
 void dt_colorspaces_cygm_apply_coeffs_to_rgb(float *out, const float *in, int num, double RGB_to_CAM[4][3], double CAM_to_RGB[3][4], dt_aligned_pixel_t coeffs);
@@ -293,6 +356,9 @@ void dt_colorspaces_cygm_to_rgb(float *out, int num, double CAM_to_RGB[3][4]);
 /** convert RGB buffer to CYGM */
 void dt_colorspaces_rgb_to_cygm(float *out, int num, double RGB_to_CAM[4][3]);
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

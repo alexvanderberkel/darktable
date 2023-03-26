@@ -352,7 +352,7 @@ gboolean restart_required = FALSE;
   </xsl:for-each>
 <xsl:text>
    {
-      GtkWidget *seclabel = gtk_label_new(_("xmp"));
+      GtkWidget *seclabel = gtk_label_new(_("XMP"));
       GtkWidget *lbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
       gtk_box_pack_start(GTK_BOX(lbox), seclabel, FALSE, FALSE, 0);
       gtk_widget_set_name(lbox, "pref_section");
@@ -360,7 +360,7 @@ gboolean restart_required = FALSE;
    }
 </xsl:text>
 
-  <xsl:for-each select="./dtconfiglist/dtconfig[@prefs='storage' and @section='xmp']">
+  <xsl:for-each select="./dtconfiglist/dtconfig[@prefs='storage' and @section='XMP']">
     <xsl:apply-templates select="." mode="tab_block"/>
   </xsl:for-each>
   <xsl:value-of select="$tab_end" />
@@ -488,6 +488,14 @@ gboolean restart_required = FALSE;
   </xsl:for-each>
   <xsl:value-of select="$dialog_end" />
 
+  <!-- dialog: tagging -->
+
+  <xsl:text>&#xA;GtkWidget *dt_prefs_init_dialog_tagging</xsl:text><xsl:value-of select="$dialog_start"/>
+  <xsl:for-each select="./dtconfiglist/dtconfig[@dialog='tagging']">
+      <xsl:apply-templates select="." mode="tab_block"/>
+  </xsl:for-each>
+  <xsl:value-of select="$dialog_end" />
+
   <!-- closing credits -->
   <xsl:text>&#xA;#endif&#xA;</xsl:text>
 
@@ -519,6 +527,10 @@ gboolean restart_required = FALSE;
   <xsl:apply-templates select="." mode="tab"/>
   <xsl:text>    gtk_event_box_set_visible_window(GTK_EVENT_BOX(labelev), FALSE);</xsl:text>
   <xsl:if test="longdescription != ''">
+    <xsl:if test="contains(longdescription,'%')">
+      <xsl:text>
+    /* xgettext:no-c-format */</xsl:text>
+    </xsl:if>
     <xsl:text>&#xA;    g_object_set(widget, "tooltip-text", _("</xsl:text><xsl:value-of select="longdescription"/><xsl:text>"), (gchar *)0);</xsl:text>
   </xsl:if>
         <xsl:choose>

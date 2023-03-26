@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2009-2020 darktable developers.
+    Copyright (C) 2009-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -24,6 +24,11 @@
 #include "config.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
+/* The pixelpipe types here are all defined as a bit mask to ensure easy testing via & operator */
 typedef enum dt_dev_pixelpipe_type_t
 {
   DT_DEV_PIXELPIPE_NONE      = 0,
@@ -52,8 +57,6 @@ typedef struct dt_dev_histogram_collection_params_t
   const struct dt_histogram_roi_t *roi;
   /** count of histogram bins. */
   uint32_t bins_count;
-  /** in most cases, bins_count-1. */
-  float mul;
 } dt_dev_histogram_collection_params_t;
 
 // params used to collect histogram during last histogram capture
@@ -61,6 +64,8 @@ typedef struct dt_dev_histogram_stats_t
 {
   /** count of histogram bins. */
   uint32_t bins_count;
+  /** size of currently allocated buffer, or 0 if none */
+  size_t buf_size;
   /** count of pixels sampled during histogram capture. */
   uint32_t pixels;
   /** count of channels: 1 for RAW, 3 for rgb/Lab. */
@@ -74,8 +79,14 @@ typedef void dt_iop_params_t;
 
 const char *dt_pixelpipe_name(dt_dev_pixelpipe_type_t pipe);
 
+#ifdef __cplusplus
+} // extern "C"
+#endif /* __cplusplus */
+
 #include "develop/pixelpipe_hb.h"
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

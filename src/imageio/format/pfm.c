@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2010-2020 darktable developers.
+    Copyright (C) 2010-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -15,10 +15,12 @@
     You should have received a copy of the GNU General Public License
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 #include "common/darktable.h"
-#include "common/imageio.h"
-#include "common/imageio_module.h"
+#include "imageio/imageio_common.h"
+#include "imageio/imageio_module.h"
 #include "imageio/format/imageio_format_api.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -115,7 +117,7 @@ const char *extension(dt_imageio_module_data_t *data)
 
 const char *name()
 {
-  return _("PFM (float)");
+  return _("PFM");
 }
 
 void init(dt_imageio_module_format_t *self)
@@ -134,6 +136,8 @@ void gui_reset(dt_imageio_module_format_t *self)
 {
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

@@ -82,12 +82,14 @@ static int _act_on_cb(lua_State *L)
 {
   lua_newtable(L);
   int table_index = 1;
-  for(const GList *image = dt_view_get_images_to_act_on(FALSE, TRUE, TRUE); image; image = g_list_next(image))
+  GList *l = dt_act_on_get_images(FALSE, TRUE, TRUE);
+  for(const GList *image = l; image; image = g_list_next(image))
   {
     luaA_push(L, dt_lua_image_t, &image->data);
     lua_seti(L, -2, table_index);
     table_index++;
   }
+  g_list_free(l);
   return 1;
 }
 
@@ -106,23 +108,63 @@ static int _current_view_cb(lua_State *L)
 
 static int _action_cb(lua_State *L)
 {
-  const gchar *action = luaL_checkstring(L, 1);
-  int instance = luaL_checkinteger(L, 2);
-  const gchar *element = lua_type(L, 3) == LUA_TSTRING ? luaL_checkstring(L, 3) : NULL;
-  const gchar *effect = lua_type(L, 4) == LUA_TSTRING ? luaL_checkstring(L, 4) : NULL;
+  int arg = 1;
+
+  const gchar *action = luaL_checkstring(L, arg++);
+
+  int instance = 0;
+
+  // support legacy order: action, instance, element, effect, size
+  if(lua_type(L, arg) == LUA_TNUMBER && lua_type(L, arg+1) == LUA_TSTRING)
+    instance = luaL_checkinteger(L, arg++);
+
+  // new order: instance optionally at end; element, effect and size also optional
+  const gchar *element = lua_type(L, arg) == LUA_TSTRING ? luaL_checkstring(L, arg++) : NULL;
+  const gchar *effect = lua_type(L, arg) == LUA_TSTRING ? luaL_checkstring(L, arg++) : NULL;
 
   float move_size = NAN;
 
-  if(lua_type(L, 5) == LUA_TNUMBER ||
-     (lua_type(L, 5) == LUA_TSTRING && strlen(luaL_checkstring(L, 5)) > 0))
-  {
-    move_size = luaL_checknumber(L, 5);
-  }
+  if(lua_type(L, arg) == LUA_TSTRING && strlen(luaL_checkstring(L, arg)) == 0)
+    arg++; // "" -> NAN
+  else if(lua_type(L, arg) != LUA_TNONE)
+    move_size = luaL_checknumber(L, arg++);
+
+  if(lua_type(L, arg) == LUA_TNUMBER)
+    instance = luaL_checkinteger(L, arg++);
 
   float ret_val = dt_action_process(action, instance, element, effect, move_size);
 
   lua_pushnumber(L, ret_val);
 
+  return 1;
+}
+
+static int _mimic_cb(lua_State *L)
+{
+  const gchar *ac_type  = luaL_checkstring(L, 1);
+  const gchar *ac_name = luaL_checkstring(L, 2);
+
+  luaL_checktype(L, 3, LUA_TFUNCTION);
+
+  lua_getfield(L, LUA_REGISTRYINDEX, "dt_lua_mimic_list");
+  if(lua_isnil(L, -1)) goto mimic_end;
+
+  lua_pushvalue(L, 3);
+  lua_setfield(L, -2, ac_name);
+
+  // find the action type definition to be simulated (including fallbacks)
+  dt_action_def_t *def = NULL;
+  for(int i = 0; i < darktable.control->widget_definitions->len; i++)
+  {
+    def = darktable.control->widget_definitions->pdata[i];
+    if(!strcmp(def->name, ac_type)) break;
+  }
+
+  lua_getglobal(L, "script_manager_running_script");
+  dt_action_define(&darktable.control->actions_lua, lua_tolstring(L,-1,NULL), ac_name, NULL, def);
+
+mimic_end:
+  lua_pop(L, 1);
   return 1;
 }
 
@@ -379,8 +421,13 @@ int dt_lua_init_gui(lua_State *L)
     lua_pushcclosure(L, dt_lua_type_member_common, 1);
     dt_lua_type_register_const_type(L, type_id, "current_view");
     lua_pushcfunction(L, _action_cb);
+    dt_lua_gtk_wrap(L);
     lua_pushcclosure(L, dt_lua_type_member_common, 1);
     dt_lua_type_register_const_type(L, type_id, "action");
+    lua_pushcfunction(L, _mimic_cb);
+    dt_lua_gtk_wrap(L);
+    lua_pushcclosure(L, dt_lua_type_member_common, 1);
+    dt_lua_type_register_const_type(L, type_id, "mimic");
     lua_pushcfunction(L, _panel_visible_cb);
     lua_pushcclosure(L, dt_lua_type_member_common, 1);
     dt_lua_type_register_const_type(L, type_id, "panel_visible");
@@ -440,6 +487,9 @@ int dt_lua_init_gui(lua_State *L)
   return 0;
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

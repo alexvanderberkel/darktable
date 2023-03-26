@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2013-2020 darktable developers.
+    Copyright (C) 2013-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -147,7 +147,7 @@ const char *name()
   return _("color mapping");
 }
 
-const char *description(struct dt_iop_module_t *self)
+const char **description(struct dt_iop_module_t *self)
 {
   return dt_iop_set_description(self, _("transfer a color palette and tonal repartition from one image to another"),
                                       _("creative"),
@@ -168,7 +168,7 @@ int flags()
 
 int default_colorspace(dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
 {
-  return iop_cs_Lab;
+  return IOP_CS_LAB;
 }
 
 static void capture_histogram(const float *col, const int width, const int height, int *hist)
@@ -193,16 +193,6 @@ static void capture_histogram(const float *col, const int width, const int heigh
 static void invert_histogram(const int *hist, float *inv_hist)
 {
 // invert non-normalised accumulated hist
-#if 0
-  int last = 0;
-  for(int i=0; i<HISTN; i++) for(int k=last; k<HISTN; k++)
-      if(hist[k] >= i)
-      {
-        last = k;
-        inv_hist[i] = 100.0*k/(float)HISTN;
-        break;
-      }
-#else
   int last = 31;
   for(int i = 0; i <= last; i++) inv_hist[i] = 100.0f * i / (float)HISTN;
   for(int i = last + 1; i < HISTN; i++)
@@ -213,7 +203,6 @@ static void invert_histogram(const int *hist, float *inv_hist)
         inv_hist[i] = 100.0f * k / (float)HISTN;
         break;
       }
-#endif
 
   // printf("inv histogram debug:\n");
   // for(int i=0;i<100;i++) printf("%d => %f\n", i, inv_hist[hist[(int)CLAMP(HISTN*i/100.0, 0, HISTN-1)]]);
@@ -444,7 +433,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
 
   const int width = roi_in->width;
   const int height = roi_in->height;
-  if (!dt_iop_have_required_input_format(4 /*we need full-color pixels*/, self, piece->colors,
+  if(!dt_iop_have_required_input_format(4 /*we need full-color pixels*/, self, piece->colors,
                                          in, out, roi_in, roi_out))
     return; // image has been copied through to output and module's trouble flag has been updated
 
@@ -453,7 +442,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
   const float sigma_r = 8.0f; // does not depend on scale
 
   // save a copy of preview input buffer so we can get histogram and color statistics out of it
-  if(self->dev->gui_attached && g && (piece->pipe->type & DT_DEV_PIXELPIPE_PREVIEW) == DT_DEV_PIXELPIPE_PREVIEW && (data->flag & ACQUIRE))
+  if(self->dev->gui_attached && g && (piece->pipe->type & DT_DEV_PIXELPIPE_PREVIEW) && (data->flag & ACQUIRE))
   {
     dt_iop_gui_enter_critical_section(self);
     if(g->buffer) dt_free_align(g->buffer);
@@ -585,7 +574,7 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
   dt_iop_colormapping_global_data_t *gd = (dt_iop_colormapping_global_data_t *)self->global_data;
   dt_iop_colormapping_gui_data_t *g = (dt_iop_colormapping_gui_data_t *)self->gui_data;
 
-  cl_int err = -999;
+  cl_int err = DT_OPENCL_DEFAULT_ERROR;
   const int devid = piece->pipe->devid;
 
   const int width = roi_in->width;
@@ -610,7 +599,7 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
 
 
   // save a copy of preview input buffer so we can get histogram and color statistics out of it
-  if(self->dev->gui_attached && g && (piece->pipe->type & DT_DEV_PIXELPIPE_PREVIEW) == DT_DEV_PIXELPIPE_PREVIEW && (data->flag & ACQUIRE))
+  if(self->dev->gui_attached && g && (piece->pipe->type & DT_DEV_PIXELPIPE_PREVIEW) && (data->flag & ACQUIRE))
   {
     dt_iop_gui_enter_critical_section(self);
     dt_free_align(g->buffer);
@@ -670,16 +659,9 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
     dev_mapio = dt_opencl_copy_host_to_device_constant(devid, sizeof(int) * MAXN, mapio);
     if(dev_mapio == NULL) goto error;
 
-    size_t sizes[3] = { ROUNDUPWD(width), ROUNDUPHT(height), 1 };
-
-    dt_opencl_set_kernel_arg(devid, gd->kernel_histogram, 0, sizeof(cl_mem), (void *)&dev_in);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_histogram, 1, sizeof(cl_mem), (void *)&dev_out);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_histogram, 2, sizeof(int), (void *)&width);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_histogram, 3, sizeof(int), (void *)&height);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_histogram, 4, sizeof(float), (void *)&equalization);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_histogram, 5, sizeof(cl_mem), (void *)&dev_target_hist);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_histogram, 6, sizeof(cl_mem), (void *)&dev_source_ihist);
-    err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_histogram, sizes);
+    err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_histogram, width, height,
+      CLARG(dev_in), CLARG(dev_out), CLARG(width), CLARG(height), CLARG(equalization), CLARG(dev_target_hist),
+      CLARG(dev_source_ihist));
     if(err != CL_SUCCESS) goto error;
 
     if(equalization > 0.001f)
@@ -703,17 +685,9 @@ int process_cl(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, cl_m
       if(err != CL_SUCCESS) goto error;
     }
 
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 0, sizeof(cl_mem), (void *)&dev_in);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 1, sizeof(cl_mem), (void *)&dev_tmp);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 2, sizeof(cl_mem), (void *)&dev_out);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 3, sizeof(int), (void *)&width);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 4, sizeof(int), (void *)&height);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 5, sizeof(int), (void *)&data->n);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 6, sizeof(cl_mem), (void *)&dev_target_mean);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 7, sizeof(cl_mem), (void *)&dev_source_mean);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 8, sizeof(cl_mem), (void *)&dev_var_ratio);
-    dt_opencl_set_kernel_arg(devid, gd->kernel_mapping, 9, sizeof(cl_mem), (void *)&dev_mapio);
-    err = dt_opencl_enqueue_kernel_2d(devid, gd->kernel_mapping, sizes);
+    err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_mapping, width, height,
+      CLARG(dev_in), CLARG(dev_tmp), CLARG(dev_out), CLARG(width), CLARG(height), CLARG(data->n), CLARG(dev_target_mean),
+      CLARG(dev_source_mean), CLARG(dev_var_ratio), CLARG(dev_mapio));
     if(err != CL_SUCCESS) goto error;
 
     dt_opencl_release_mem_object(dev_tmp);
@@ -743,7 +717,7 @@ error:
   dt_opencl_release_mem_object(dev_source_mean);
   dt_opencl_release_mem_object(dev_var_ratio);
   dt_opencl_release_mem_object(dev_mapio);
-  dt_print(DT_DEBUG_OPENCL, "[opencl_colormapping] couldn't enqueue kernel! %d\n", err);
+  dt_print(DT_DEBUG_OPENCL, "[opencl_colormapping] couldn't enqueue kernel! %s\n", cl_errstr(err));
   return FALSE;
 }
 #endif
@@ -781,7 +755,7 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pix
   memcpy(d, p, sizeof(dt_iop_colormapping_params_t));
 #ifdef HAVE_OPENCL
   if(d->equalization > 0.1f)
-    piece->process_cl_ready = (piece->process_cl_ready && !(darktable.opencl->avoid_atomics));
+    piece->process_cl_ready = (piece->process_cl_ready && !dt_opencl_avoid_atomics(pipe->devid));
 #endif
 }
 
@@ -838,16 +812,6 @@ void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev
 {
   free(piece->data);
   piece->data = NULL;
-}
-
-void gui_update(struct dt_iop_module_t *self)
-{
-  dt_iop_colormapping_params_t *p = (dt_iop_colormapping_params_t *)self->params;
-  dt_iop_colormapping_gui_data_t *g = (dt_iop_colormapping_gui_data_t *)self->gui_data;
-  dt_bauhaus_slider_set(g->clusters, p->n);
-  dt_bauhaus_slider_set(g->dominance, p->dominance);
-  dt_bauhaus_slider_set(g->equalization, p->equalization);
-  dt_control_queue_redraw_widget(self->widget);
 }
 
 void init_global(dt_iop_module_so_t *module)
@@ -1021,7 +985,8 @@ static void process_clusters(gpointer instance, gpointer user_data)
     if(f)
     {
       if(fwrite(&g->flowback, sizeof(g->flowback), 1, f) < 1)
-        fprintf(stderr, "[colormapping] could not write flowback file /tmp/dt_colormapping_loaded\n");
+        dt_print(DT_DEBUG_ALWAYS,
+                 "[colormapping] could not write flowback file /tmp/dt_colormapping_loaded\n");
       fclose(f);
     }
   }
@@ -1081,11 +1046,11 @@ void gui_init(struct dt_iop_module_t *self)
   g->dominance = dt_bauhaus_slider_from_params(self, "dominance");
   gtk_widget_set_tooltip_text(g->dominance, _("how clusters are mapped. low values: based on color "
                                               "proximity, high values: based on color dominance"));
-  dt_bauhaus_slider_set_format(g->dominance, "%.02f%%");
+  dt_bauhaus_slider_set_format(g->dominance, "%");
 
   g->equalization = dt_bauhaus_slider_from_params(self, "equalization");
   gtk_widget_set_tooltip_text(g->equalization, _("level of histogram equalization"));
-  dt_bauhaus_slider_set_format(g->equalization, "%.02f%%");
+  dt_bauhaus_slider_set_format(g->equalization, "%");
 
   /* add signal handler for preview pipe finished: process clusters if requested */
   DT_DEBUG_CONTROL_SIGNAL_CONNECT(darktable.signals, DT_SIGNAL_DEVELOP_PREVIEW_PIPE_FINISHED,
@@ -1111,6 +1076,9 @@ void gui_cleanup(struct dt_iop_module_t *self)
   IOP_GUI_FREE;
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+

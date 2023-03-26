@@ -1,6 +1,6 @@
 /*
    This file is part of darktable,
-   Copyright (C) 2020 - darktable developers.
+   Copyright (C) 2020-2023 - darktable developers.
 
    darktable is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -59,7 +59,6 @@ extern float expf(const float x);
 extern float logf(const float x);
 
 #endif
-
 
 /* Bring our own optimized maths functions because Clang makes dumb shit */
 
@@ -142,12 +141,9 @@ static inline float clamp_simd(const float x)
 {
   return fminf(fmaxf(x, 0.0f), 1.0f);
 }
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
+// vim: shiftwidth=2 expandtab tabstop=2 cindent
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
 
-
-#ifdef _OPENMP
-#pragma omp declare simd
-#endif
-static inline float sqf(const float x)
-{
-  return x * x;
-}

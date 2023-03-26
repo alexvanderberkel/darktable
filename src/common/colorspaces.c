@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2010-2021 darktable developers.
+    Copyright (C) 2010-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -28,7 +28,6 @@
 #include "control/conf.h"
 #include "control/control.h"
 #include "develop/imageop.h"
-#include "external/adobe_coeff.c"
 
 #include <strings.h>
 
@@ -344,7 +343,7 @@ static double _PQ_fct(double x)
   static const double C2 = (2413.0 / 4096.0) * 32.0;
   static const double C3 = (2392.0 / 4096.0) * 32.0;
 
-  if (x == 0.0) return 0.0;
+  if(x == 0.0) return 0.0;
   const double sign = x;
   x = fabs(x);
 
@@ -367,14 +366,14 @@ static double _HLG_fct(double x)
 
   double e = MAX(x * (1.0 - Beta) + Beta, 0.0);
 
-  if (e == 0.0) return 0.0;
+  if(e == 0.0) return 0.0;
 
   const double sign = e;
   e = fabs(e);
 
   double res = 0.0;
 
-  if (e <= 0.5)
+  if(e <= 0.5)
   {
     res = e * e / 3.0;
   }
@@ -390,7 +389,7 @@ static cmsToneCurve* _colorspaces_create_transfer(int32_t size, double (*fct)(do
 {
   float *values = g_malloc(sizeof(float) * size);
 
-  for (int32_t i = 0; i < size; ++i)
+  for(int32_t i = 0; i < size; ++i)
   {
     const double x = (float)i / (size - 1);
     const double y = MIN(fct(x), 1.0f);
@@ -819,7 +818,7 @@ const dt_colorspaces_color_profile_t *dt_colorspaces_get_work_profile(const int 
     for(const GList *modules = darktable.iop; modules; modules = g_list_next(modules))
     {
       const dt_iop_module_so_t *module = (const dt_iop_module_so_t *)(modules->data);
-      if(!strcmp(module->op, "colorin"))
+      if(dt_iop_module_is(module, "colorin"))
       {
         colorin = module;
         break;
@@ -834,10 +833,12 @@ const dt_colorspaces_color_profile_t *dt_colorspaces_get_work_profile(const int 
     // get the profile assigned from colorin
     // FIXME: does this work when using JPEG thumbs and the image was never opened?
     sqlite3_stmt *stmt;
+    // clang-format off
     DT_DEBUG_SQLITE3_PREPARE_V2(
       dt_database_get(darktable.db),
       "SELECT op_params FROM main.history WHERE imgid=?1 AND operation='colorin' ORDER BY num DESC LIMIT 1", -1,
       &stmt, NULL);
+    // clang-format on
     DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
     if(sqlite3_step(stmt) == SQLITE_ROW)
     {
@@ -869,7 +870,7 @@ const dt_colorspaces_color_profile_t *dt_colorspaces_get_output_profile(const in
     for(const GList *modules = darktable.iop; modules; modules = g_list_next(modules))
     {
       const dt_iop_module_so_t *module = (const dt_iop_module_so_t *)(modules->data);
-      if(!strcmp(module->op, "colorout"))
+      if(dt_iop_module_is(module, "colorout"))
       {
         colorout = module;
         break;
@@ -890,10 +891,12 @@ const dt_colorspaces_color_profile_t *dt_colorspaces_get_output_profile(const in
     // get the profile assigned from colorout
     // FIXME: does this work when using JPEG thumbs and the image was never opened?
     sqlite3_stmt *stmt;
+    // clang-format off
     DT_DEBUG_SQLITE3_PREPARE_V2(
       dt_database_get(darktable.db),
       "SELECT op_params FROM main.history WHERE imgid=?1 AND operation='colorout' ORDER BY num DESC LIMIT 1", -1,
       &stmt, NULL);
+    // clang-format on
     DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
     if(sqlite3_step(stmt) == SQLITE_ROW)
     {
@@ -1088,66 +1091,6 @@ error:
   g_free(utf8);
 }
 
-void rgb2hsl(const dt_aligned_pixel_t rgb, float *h, float *s, float *l)
-{
-  const float r = rgb[0], g = rgb[1], b = rgb[2];
-  const float pmax = fmaxf(r, fmax(g, b));
-  const float pmin = fminf(r, fmin(g, b));
-  const float delta = (pmax - pmin);
-
-  float hv = 0, sv = 0, lv = (pmin + pmax) / 2.0;
-
-  if(delta != 0.0f)
-  {
-    sv = lv < 0.5 ? delta / fmaxf(pmax + pmin, 1.52587890625e-05f)
-                  : delta / fmaxf(2.0 - pmax - pmin, 1.52587890625e-05f);
-
-    if(pmax == r)
-      hv = (g - b) / delta;
-    else if(pmax == g)
-      hv = 2.0 + (b - r) / delta;
-    else if(pmax == b)
-      hv = 4.0 + (r - g) / delta;
-    hv /= 6.0;
-    if(hv < 0.0)
-      hv += 1.0;
-    else if(hv > 1.0)
-      hv -= 1.0;
-  }
-  *h = hv;
-  *s = sv;
-  *l = lv;
-}
-
-// for efficiency, 'hue' must be pre-scaled to be in 0..6
-static inline float hue2rgb(float m1, float m2, float hue)
-{
-  // compute the value for one of the RGB channels from the hue angle.
-  // If 1 <= angle < 3, return m2; if 4 <= angle <= 6, return m1; otherwise, linearly interpolate between m1 and m2.
-  if(hue < 1.0f)
-    return (m1 + (m2 - m1) * hue);
-  else if(hue < 3.0f)
-    return m2;
-  else
-    return hue < 4.0f ? (m1 + (m2 - m1) * (4.0f - hue)) : m1;
-}
-
-void hsl2rgb(dt_aligned_pixel_t rgb, float h, float s, float l)
-{
-  float m1, m2;
-  if(s == 0)
-  {
-    rgb[0] = rgb[1] = rgb[2] = l;
-    return;
-  }
-  m2 = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
-  m1 = (2.0 * l - m2);
-  h *= 6.0f;  // pre-scale hue angle
-  rgb[0] = hue2rgb(m1, m2, h < 4.0f ? h + 2.0f : h - 4.0f);
-  rgb[1] = hue2rgb(m1, m2, h);
-  rgb[2] = hue2rgb(m1, m2, h > 2.0f ? h - 2.0f : h + 4.0f);
-}
-
 static dt_colorspaces_color_profile_t *_create_profile(dt_colorspaces_color_profile_type_t type,
                                                        cmsHPROFILE profile, const char *name, int in_pos,
                                                        int out_pos, int display_pos, int category_pos,
@@ -1293,7 +1236,7 @@ static void _update_display2_profile(guchar *tmp_data, gsize size, char *name, s
 
 static void cms_error_handler(cmsContext ContextID, cmsUInt32Number ErrorCode, const char *text)
 {
-  fprintf(stderr, "[lcms2] error %d: %s\n", ErrorCode, text);
+  dt_print(DT_DEBUG_ALWAYS, "[lcms2] error %d: %s\n", ErrorCode, text);
 }
 
 static gint _sort_profiles(gconstpointer a, gconstpointer b)
@@ -1416,7 +1359,7 @@ dt_colorspaces_t *dt_colorspaces_init()
   // TODO: what about display?
   res->profiles
       = g_list_append(res->profiles, _create_profile(DT_COLORSPACE_SRGB, dt_colorspaces_create_srgb_profile_v4(),
-                                                     _("sRGB (e.g. JPG)"), ++in_pos, -1, -1, -1, -1, -1));
+                                                     _("sRGB"), ++in_pos, -1, -1, -1, -1, -1));
 
   res->profiles
       = g_list_append(res->profiles, _create_profile(DT_COLORSPACE_SRGB, dt_colorspaces_create_srgb_profile(),
@@ -1575,7 +1518,7 @@ dt_colorspaces_t *dt_colorspaces_init()
         // bad histogram profile selected, we must reset it to sRGB
         const char *name = dt_colorspaces_get_name(prof->type, prof->filename);
         dt_control_log(_("profile `%s' not usable as histogram profile. it has been replaced by sRGB!"), name);
-        fprintf(stderr,
+        dt_print(DT_DEBUG_ALWAYS,
                 "[colorspaces] profile `%s' not usable as histogram profile. it has been replaced by sRGB!\n",
                 name);
         res->histogram_type = DT_COLORSPACE_SRGB;
@@ -1642,7 +1585,7 @@ void dt_colorspaces_cleanup(dt_colorspaces_t *self)
 const char *dt_colorspaces_get_name(dt_colorspaces_color_profile_type_t type,
                                     const char *filename)
 {
-  switch (type)
+  switch(type)
   {
      case DT_COLORSPACE_NONE:
        return NULL;
@@ -1971,7 +1914,7 @@ static gboolean _colorspaces_is_base_name(const char *profile)
 static const char *_colorspaces_get_base_name(const char *profile)
 {
   const char* f = profile + strlen(profile);
-  for (; f >= profile; f--)
+  for(; f >= profile; f--)
   {
     if(*f == '/' || *f == '\\')
       return ++f;   // path separator found - return the filename only, without the leading separator
@@ -2261,7 +2204,7 @@ static void dt_colorspaces_pseudoinverse(double (*in)[3], double (*out)[3], int 
     }
 }
 
-int dt_colorspaces_conversion_matrices_xyz(const char *name, float in_XYZ_to_CAM[9], double XYZ_to_CAM[4][3], double CAM_to_XYZ[3][4])
+int dt_colorspaces_conversion_matrices_xyz(const float adobe_XYZ_to_CAM[4][3], float in_XYZ_to_CAM[9], double XYZ_to_CAM[4][3], double CAM_to_XYZ[3][4])
 {
   if(!isnan(in_XYZ_to_CAM[0]))
   {
@@ -2272,16 +2215,12 @@ int dt_colorspaces_conversion_matrices_xyz(const char *name, float in_XYZ_to_CAM
   }
   else
   {
-    float adobe_XYZ_to_CAM[4][3];
-    adobe_XYZ_to_CAM[0][0] = NAN;
-
-    dt_dcraw_adobe_coeff(name, (float(*)[12])adobe_XYZ_to_CAM);
     if(isnan(adobe_XYZ_to_CAM[0][0]))
       return FALSE;
 
     for(int i = 0; i < 4; i++)
       for(int j = 0; j < 3; j++)
-        XYZ_to_CAM[i][j] = (double) adobe_XYZ_to_CAM[i][j];
+        XYZ_to_CAM[i][j] = (double)adobe_XYZ_to_CAM[i][j];
   }
 
   // Invert the matrix
@@ -2295,7 +2234,7 @@ int dt_colorspaces_conversion_matrices_xyz(const char *name, float in_XYZ_to_CAM
 }
 
 // Converted from dcraw's cam_xyz_coeff()
-int dt_colorspaces_conversion_matrices_rgb(const char *name,
+int dt_colorspaces_conversion_matrices_rgb(const float adobe_XYZ_to_CAM[4][3],
                                            double out_RGB_to_CAM[4][3], double out_CAM_to_RGB[3][4],
                                            const float *embedded_matrix,
                                            double mul[4])
@@ -2307,7 +2246,9 @@ int dt_colorspaces_conversion_matrices_rgb(const char *name,
 
   if(embedded_matrix == NULL || isnan(embedded_matrix[0]))
   {
-    dt_dcraw_adobe_coeff(name, (float(*)[12])XYZ_to_CAM);
+    for(int k=0; k<4; k++)
+      for(int i=0; i<3; i++)
+        XYZ_to_CAM[k][i] = adobe_XYZ_to_CAM[k][i];
   }
   else
   {
@@ -2325,7 +2266,6 @@ int dt_colorspaces_conversion_matrices_rgb(const char *name,
     XYZ_to_CAM[2][1] = embedded_matrix[7];
     XYZ_to_CAM[2][2] = embedded_matrix[8];
   }
-
 
   if(isnan(XYZ_to_CAM[0][0]))
     return FALSE;
@@ -2379,16 +2319,16 @@ void dt_colorspaces_cygm_apply_coeffs_to_rgb(float *out, const float *in, int nu
 {
   // Create the CAM to RGB with applied WB matrix
   double CAM_to_RGB_WB[3][4];
-  for (int a=0; a<3; a++)
-    for (int b=0; b<4; b++)
+  for(int a=0; a<3; a++)
+    for(int b=0; b<4; b++)
       CAM_to_RGB_WB[a][b] = CAM_to_RGB[a][b] * coeffs[b];
 
   // Create the RGB->RGB+WB matrix
   double RGB_to_RGB_WB[3][3];
-  for (int a=0; a<3; a++)
-    for (int b=0; b<3; b++) {
+  for(int a=0; a<3; a++)
+    for(int b=0; b<3; b++) {
       RGB_to_RGB_WB[a][b] = 0.0f;
-      for (int c=0; c<4; c++)
+      for(int c=0; c<4; c++)
         RGB_to_RGB_WB[a][b] += CAM_to_RGB_WB[a][c] * RGB_to_CAM[c][b];
     }
 
@@ -2400,8 +2340,8 @@ void dt_colorspaces_cygm_apply_coeffs_to_rgb(float *out, const float *in, int nu
     const float *inpos = &in[i*4];
     float *outpos = &out[i*4];
     outpos[0]=outpos[1]=outpos[2] = 0.0f;
-    for (int a=0; a<3; a++)
-      for (int b=0; b<3; b++)
+    for(int a=0; a<3; a++)
+      for(int b=0; b<3; b++)
         outpos[a] += RGB_to_RGB_WB[a][b] * inpos[b];
   }
 }
@@ -2440,6 +2380,8 @@ void dt_colorspaces_rgb_to_cygm(float *out, int num, double RGB_to_CAM[4][3])
   }
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

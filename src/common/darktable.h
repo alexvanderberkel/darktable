@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2009-2021 darktable developers.
+    Copyright (C) 2009-2023 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -47,7 +47,7 @@
 #include "common/dtpthread.h"
 #include "common/dttypes.h"
 #include "common/utility.h"
-#include <time.h>
+#include "common/wb_presets.h"
 #ifdef _WIN32
 #include "win/getrusage.h"
 #else
@@ -124,23 +124,6 @@ typedef unsigned int u_int;
 
 #endif /* _OPENMP */
 
-/* Create cloned functions for various CPU SSE generations */
-/* See for instructions https://hannes.hauswedell.net/post/2017/12/09/fmv/ */
-/* TL;DR : use only on SIMD functions containing low-level paralellized/vectorized loops */
-#if __has_attribute(target_clones) && !defined(_WIN32) && !defined(NATIVE_ARCH)
-# if defined(__amd64__) || defined(__amd64) || defined(__x86_64__) || defined(__x86_64)
-#define __DT_CLONE_TARGETS__ __attribute__((target_clones("default", "sse2", "sse3", "sse4.1", "sse4.2", "popcnt", "avx", "avx2", "avx512f", "fma4")))
-# elif defined(__PPC64__)
-/* __PPC64__ is the only macro tested for in is_supported_platform.h, other macros would fail there anyway. */
-#define __DT_CLONE_TARGETS__ __attribute__((target_clones("default","cpu=power9")))
-# endif
-#else
-#define __DT_CLONE_TARGETS__
-#endif
-
-/* Helper to force stack vectors to be aligned on 64 bits blocks to enable AVX2 */
-#define DT_IS_ALIGNED(x) __builtin_assume_aligned(x, 64)
-
 #ifndef _RELEASE
 #include "common/poison.h"
 #endif
@@ -150,12 +133,36 @@ typedef unsigned int u_int;
 // for signal debugging symbols
 #include "control/signal.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
+/* Create cloned functions for various CPU SSE generations */
+/* See for instructions https://hannes.hauswedell.net/post/2017/12/09/fmv/ */
+/* TL;DR : use only on SIMD functions containing low-level paralellized/vectorized loops */
+#if __has_attribute(target_clones) && !defined(_WIN32) && !defined(NATIVE_ARCH)
+# if defined(__amd64__) || defined(__amd64) || defined(__x86_64__) || defined(__x86_64)
+#define __DT_CLONE_TARGETS__ __attribute__((target_clones("default", "sse2", "sse3", "sse4.1", "sse4.2", "popcnt", "avx", "avx2", "avx512f", "fma4")))
+# elif defined(__PPC64__)
+/* __PPC64__ is the only macro tested for in is_supported_platform.h, other macros would fail there anyway. */
+#define __DT_CLONE_TARGETS__ __attribute__((target_clones("default","cpu=power9")))
+# else
+#define __DT_CLONE_TARGETS__
+# endif
+#else
+#define __DT_CLONE_TARGETS__
+#endif
+
+/* Helper to force stack vectors to be aligned on 64 bits blocks to enable AVX2 */
+#define DT_IS_ALIGNED(x) __builtin_assume_aligned(x, 64)
+
 #define DT_MODULE_VERSION 23 // version of dt's module interface
 
 // version of current performance configuration version
 // if you want to run an updated version of the performance configuration later
 // bump this number and make sure you have an updated logic in dt_configure_performance()
-#define DT_CURRENT_PERFORMANCE_CONFIGURE_VERSION 2
+#define DT_CURRENT_PERFORMANCE_CONFIGURE_VERSION 13
+#define DT_PERF_INFOSIZE 4096
 
 // every module has to define this:
 #ifdef _DEBUG
@@ -245,6 +252,7 @@ typedef float dt_boundingbox_t[4];  //(x,y) of upperleft, then (x,y) of lowerrig
 typedef enum dt_debug_thread_t
 {
   // powers of two, masking
+  DT_DEBUG_ALWAYS         = 0,       // special case tested by dt_print() variants
   DT_DEBUG_CACHE          = 1 <<  0,
   DT_DEBUG_CONTROL        = 1 <<  1,
   DT_DEBUG_DEV            = 1 <<  2,
@@ -266,16 +274,30 @@ typedef enum dt_debug_thread_t
   DT_DEBUG_UNDO           = 1 << 19,
   DT_DEBUG_SIGNAL         = 1 << 20,
   DT_DEBUG_PARAMS         = 1 << 21,
-  DT_DEBUG_DEMOSAIC       = 1 << 22,
+  DT_DEBUG_ACT_ON         = 1 << 22,
   DT_DEBUG_TILING         = 1 << 23,
+  DT_DEBUG_VERBOSE        = 1 << 24,
+  DT_DEBUG_PIPE           = 1 << 25,
+  DT_DEBUG_ALL            = 0xffffffff & ~DT_DEBUG_VERBOSE,
+  DT_DEBUG_COMMON         = DT_DEBUG_OPENCL | DT_DEBUG_DEV | DT_DEBUG_MASKS | DT_DEBUG_PARAMS | DT_DEBUG_IMAGEIO | DT_DEBUG_PIPE,
 } dt_debug_thread_t;
 
 typedef struct dt_codepath_t
 {
   unsigned int SSE2 : 1;
   unsigned int _no_intrinsics : 1;
-  unsigned int OPENMP_SIMD : 1; // always stays the last one
 } dt_codepath_t;
+
+typedef struct dt_sys_resources_t
+{
+  size_t total_memory;
+  size_t mipmap_memory;
+  int *fractions;   // fractions are calculated as res=input / 1024  * fraction
+  int *refresource; // for the debug resource modes we use fixed settings
+  int group;
+  int level;
+  int tunemode;
+} dt_sys_resources_t;
 
 typedef struct darktable_t
 {
@@ -324,12 +346,19 @@ typedef struct darktable_t
   char *tmpdir;
   char *configdir;
   char *cachedir;
+  char *dump_pfm_module;
+  char *dump_pfm_pipe;
+  char *tmp_directory;
+  char *bench_module;
   dt_lua_state_t lua_state;
   GList *guides;
   double start_wtime;
   GList *themes;
   int32_t unmuted_signal_dbg_acts;
   gboolean unmuted_signal_dbg[DT_SIGNAL_COUNT];
+  GTimeZone *utc_tz;
+  GDateTime *origin_gdt;
+  struct dt_sys_resources_t dtresources;
 } darktable_t;
 
 typedef struct
@@ -341,11 +370,19 @@ typedef struct
 extern darktable_t darktable;
 
 int dt_init(int argc, char *argv[], const gboolean init_gui, const gboolean load_data, lua_State *L);
+void dt_get_sysresource_level();
 void dt_cleanup();
 void dt_print(dt_debug_thread_t thread, const char *msg, ...) __attribute__((format(printf, 2, 3)));
-void dt_gettime_t(char *datetime, size_t datetime_len, time_t t);
-void dt_gettime(char *datetime, size_t datetime_len);
+/* same as above but without time stamp : nts = no time stamp */
+void dt_print_nts(dt_debug_thread_t thread, const char *msg, ...) __attribute__((format(printf, 2, 3)));
 int dt_worker_threads();
+size_t dt_get_available_mem();
+size_t dt_get_singlebuffer_mem();
+
+void dt_dump_pfm_file(const char *pipe, const void *data, const int width, const int height, const int bpp, const char *modname, const char *head, const gboolean input, const gboolean output, const gboolean cpu);
+void dt_dump_pfm(const char *filename, const void* data, const int width, const int height, const int bpp, const char *modname);
+void dt_dump_pipe_pfm(const char *mod, const void* data, const int width, const int height, const int bpp, const gboolean input, const char *pipe);
+
 void *dt_alloc_align(size_t alignment, size_t size);
 static inline void* dt_calloc_align(size_t alignment, size_t size)
 {
@@ -433,11 +470,6 @@ static inline gboolean dt_is_aligned(const void *pointer, size_t byte_count)
     return (uintptr_t)pointer % byte_count == 0;
 }
 
-static inline void * dt_alloc_sse_ps(size_t pixels)
-{
-  return __builtin_assume_aligned(dt_alloc_align(64, pixels * sizeof(float)), 64);
-}
-
 static inline void * dt_check_sse_aligned(void * pointer)
 {
   if(dt_is_aligned(pointer, 64))
@@ -475,6 +507,15 @@ void dt_show_times_f(const dt_times_t *start, const char *prefix, const char *su
 gboolean dt_supported_image(const gchar *filename);
 
 static inline size_t dt_get_num_threads()
+{
+#ifdef _OPENMP
+  return (size_t)CLAMP(omp_get_num_procs(), 1, darktable.num_openmp_threads);
+#else
+  return 1;
+#endif
+}
+
+static inline size_t dt_get_num_procs()
 {
 #ifdef _OPENMP
   // we can safely assume omp_get_num_procs is > 0
@@ -543,23 +584,13 @@ static inline float *dt_calloc_perthread_float(const size_t n, size_t* padded_si
 // a hint to vectorize a loop.  Uncomment the following line if such a combination is the compilation target.
 //#define DT_NO_SIMD_HINTS
 
-// copy the RGB channels of a pixel using nontemporal stores if possible; includes the 'alpha' channel as well
-// if faster due to vectorization, but subsequent code should ignore the value of the alpha unless explicitly
-// set afterwards (since it might not have been copied).  NOTE: nontemporal stores will actually be *slower*
-// if we immediately access the pixel again.  This function should only be used when processing an entire
-// image before doing anything else with the destination buffer.
-static inline void copy_pixel_nontemporal(float *const __restrict__ out, const float *const __restrict__ in)
-{
-#if (__clang__+0 > 7) && (__clang__+0 < 10)
-  for_each_channel(k,aligned(in,out:16)) __builtin_nontemporal_store(in[k],out[k]);
-#else
-  for_each_channel(k,aligned(in,out:16) dt_omp_nontemporal(out)) out[k] = in[k];
-#endif
-}
-
 // copy the RGB channels of a pixel; includes the 'alpha' channel as well if faster due to vectorization, but
 // subsequent code should ignore the value of the alpha unless explicitly set afterwards (since it might not have
 // been copied)
+
+// When writing sequentially to an output buffer, consider using
+// copy_pixel_nontemporal (defined in develop/imageop.h) to avoid the overhead
+// of loading the cache lines from RAM before then completely overwriting them
 static inline void copy_pixel(float *const __restrict__ out, const float *const __restrict__ in)
 {
   for_each_channel(k,aligned(in,out:16)) out[k] = in[k];
@@ -597,10 +628,10 @@ static inline const GList *g_list_prev_wraparound(const GList *list)
   return g_list_previous(list) ? g_list_previous(list) : g_list_last((GList*)list);
 }
 
+// checks internally for DT_DEBUG_MEMORY
 void dt_print_mem_usage();
 
-void dt_configure_performance();
-
+void dt_configure_runtime_performance(const int version, char *config_info);
 // helper function which loads whatever image_to_load points to: single image files or whole directories
 // it tells you if it was a single image or a directory in single_image (when it's not NULL)
 int dt_load_from_string(const gchar *image_to_load, gboolean open_image_in_dr, gboolean *single_image);
@@ -611,9 +642,10 @@ int dt_load_from_string(const gchar *image_to_load, gboolean open_image_in_dr, g
 static inline void dt_unreachable_codepath_with_caller(const char *description, const char *file,
                                                        const int line, const char *function)
 {
-  fprintf(stderr, "[dt_unreachable_codepath] {%s} %s:%d (%s) - we should not be here. please report this to "
-                  "the developers.",
-          description, file, line, function);
+  dt_print(DT_DEBUG_ALWAYS,
+           "[dt_unreachable_codepath] {%s} %s:%d (%s) - we should not be here. please report "
+           "this to the developers.",
+           description, file, line, function);
   __builtin_unreachable();
 }
 
@@ -639,6 +671,40 @@ static inline void dt_unreachable_codepath_with_caller(const char *description, 
  */
 #define DT_MAX_PATH_FOR_PARAMS 4096
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+/*
+ * Helper functions for transition to gnome style xgettext translation context marking
+ *
+ * Many calls expect untranslated strings because they need to store them as ids in a language independent way.
+ * They then internally before displaying call Q_ to translate, which allows an embedded translation context to be specified.
+ * The qnome format "context|string" is used.
+ * Intltool does not support this format when it scans N_, so NC_("context","string") has to be used.
+ * But the standard NC_ does not propagate the context with the string. So here it is overridden to combine both parts.
+ *
+ * A better solution would be to switch to a modern xgettext https://wiki.gnome.org/MigratingFromIntltoolToGettext
+ *
+ *    xgettext --keyword=Q_:1g --keyword=N_:1g would allow using standard N_("context|string") to mark and pass on unchanged.
+ *
+ * This would also enable contextualised strings in introspection markups, like
+ *
+ *    DT_INTENT_SATURATION = INTENT_SATURATION, // $DESCRIPTION: "rendering intent|saturation"
+ *
+ * Before storing in a language-indpendent format, like shortcutsrc, NQ_ should be used to strip any context from the string.
+ */
+#undef NC_
+#define NC_(Context, String) (Context "|" String)
+
+static inline const gchar *NQ_(const gchar *String)
+{
+  const gchar *context_end = strchr(String, '|');
+  return context_end ? context_end + 1 : String;
+}
+
+#ifdef __cplusplus
+} // extern "C"
+#endif /* __cplusplus */
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

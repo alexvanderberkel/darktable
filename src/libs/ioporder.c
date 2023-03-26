@@ -51,7 +51,7 @@ uint32_t container(dt_lib_module_t *self)
   return DT_UI_CONTAINER_PANEL_RIGHT_BOTTOM;
 }
 
-int position()
+int position(const dt_lib_module_t *self)
 {
   return 880;
 }
@@ -83,11 +83,13 @@ void update(dt_lib_module_t *self)
 
     sqlite3_stmt *stmt;
 
+    // clang-format off
     DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
                                 "SELECT op_params, name"
                                 " FROM data.presets"
                                 " WHERE operation='ioporder'"
                                 " ORDER BY writeprotect DESC", -1, &stmt, NULL);
+    // clang-format on
 
     while(sqlite3_step(stmt) == SQLITE_ROW)
     {
@@ -118,23 +120,13 @@ void update(dt_lib_module_t *self)
     if(!found)
     {
       d->current_mode = DT_IOP_ORDER_CUSTOM;
-      gtk_label_set_text(GTK_LABEL(d->widget), _(dt_iop_order_string(DT_IOP_ORDER_CUSTOM)));
+      gtk_label_set_text(GTK_LABEL(d->widget), _(dt_iop_order_string(d->current_mode)));
     }
   }
-  else if(kind == DT_IOP_ORDER_LEGACY)
+  else
   {
     d->current_mode = kind;
-    gtk_label_set_text(GTK_LABEL(d->widget), _(dt_iop_order_string(DT_IOP_ORDER_LEGACY)));
-  }
-  else if(kind == DT_IOP_ORDER_V30)
-  {
-    d->current_mode = kind;
-    gtk_label_set_text(GTK_LABEL(d->widget), _(dt_iop_order_string(DT_IOP_ORDER_V30)));
-  }
-  else if(kind == DT_IOP_ORDER_V30_JPG)
-  {
-    d->current_mode = kind;
-    gtk_label_set_text(GTK_LABEL(d->widget), _(dt_iop_order_string(DT_IOP_ORDER_V30_JPG)));
+    gtk_label_set_text(GTK_LABEL(d->widget), _(dt_iop_order_string(d->current_mode)));
   }
 }
 
@@ -189,8 +181,8 @@ void gui_reset (dt_lib_module_t *self)
     dt_dev_pixelpipe_rebuild(darktable.develop);
 
     d->current_mode = DT_IOP_ORDER_V30;
-    if(d->widget)
-      gtk_label_set_text(GTK_LABEL(d->widget), _("v3.0"));
+    if(d->widget) gtk_label_set_text(GTK_LABEL(d->widget), _(dt_iop_order_string(d->current_mode)));
+
     g_list_free_full(iop_order_list, free);
   }
 }
@@ -257,6 +249,8 @@ gboolean preset_autoapply(dt_lib_module_t *self)
   return TRUE;
 }
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

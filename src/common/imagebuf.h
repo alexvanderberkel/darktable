@@ -23,6 +23,10 @@
 
 #include "develop/imageop.h" // for dt_iop_roi_t
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
 // Allocate a 64-byte aligned buffer for an image of the given dimensions and channels.
 // The return value must be freed with dt_free_align().
 static inline float *__restrict__ dt_iop_image_alloc(const size_t width, const size_t height, const size_t ch)
@@ -114,7 +118,7 @@ void dt_iop_image_add_image(float *const buf, const float *const other_buf, cons
 void dt_iop_image_sub_image(float *const buf, const float *const other_buf, const size_t width, const size_t height,
                             const size_t ch);
 
-// Subtract each element of the image buffer from the given constant value 
+// Subtract each element of the image buffer from the given constant value
 void dt_iop_image_invert(float *const buf, const float max_value, const size_t width, const size_t height,
                          const size_t ch);
 
@@ -137,6 +141,13 @@ void dt_iop_image_copy_benchmark();
 // load configurable settings from darktablerc
 void dt_iop_image_copy_configure();
 
-// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
+#ifdef __cplusplus
+} // extern "C"
+#endif /* __cplusplus */
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on
+
